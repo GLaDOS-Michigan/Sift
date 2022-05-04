@@ -1,0 +1,121 @@
+#lang ivy1.7
+
+include paxos_protocol0
+
+isolate protocol1 = {
+    relation one_a(R: round, I: inst)
+    relation one_b(S: node, R: round, V: votemap_seg)
+    relation two_a(I: inst, R: round, V: value)
+    relation two_b(S: node, I: inst, R: round, V: value)
+    relation decision(I: inst, V: value)
+
+    relation active(R: round)
+    relation available(R: round, I: inst)
+    relation left_round(N: node, R: round)
+
+    specification {
+        after init {
+            one_a(R, I) := false;
+            one_b(S, R, V) := false;
+            two_a(R, I, V) := false;
+            two_b(S, R, I, V) := false;
+            decision(I, V) := false;
+
+            active(R) := false;
+            available(R, I) := false;
+            left_round(N, R) := false;
+        }
+
+        action start_round(r: round, i: inst) = {
+            if forall I. ~one_a(r, I) {
+                one_a(r, i) := true;
+            }
+        }
+
+        action join_round(n: node, r: round) = {
+            if ~left_round(n, r) {
+                left_round(n, R) := left_round(n, R) | R < r;
+                call protocol0.join_round(n, r);
+            }
+        }
+
+        action receive_one_a(n: node, r: round, i: inst, v: votemap_seg) = {
+            require forall I. v.first <= I & (v.value(I) if I < v.upper else not_a_vote).maxr ~= 0 -> two_a(I, v.value(I).maxr, v.value(I).maxv);
+            require forall I, R, V. v.first <= I & two_b(n, I, R, V) -> R <= (v.value(I) if I < v.upper else not_a_vote).maxr;
+            require v.first = i;
+            if ~left_round(n, r) {
+            if one_a(r, i) {
+            if forall I, R, V. v.first <= I & (v.value(I) if I < v.upper else not_a_vote).maxr = 0 -> ~two_b(n, I, R, V) {
+
+            one_b(n, r, v) := true;
+            call join_round(n, r);
+            }}}
+        }
+
+        action receive_join_acks(r: round, q: nset, m: votemap_seg) = {
+            require m.first <= m.upper & nset.majority(q);
+            require r ~= 0;
+            require forall N.  nset.member(N, q) -> exists V. one_b(N, r, V);
+
+            require forall N, V. nset.member(N, q) & one_b(N, r, V) -> votemap_seg(V).first = m.first;
+            require forall I.  m.first <= I & (m.value(I) if I < m.upper else not_a_vote).maxr = 0 ->
+                (forall N, V. nset.member(N, q) & one_b(N, r, V) -> (votemap_seg(V).value(I) if I < votemap_seg(V).upper else not_a_vote).maxr = 0);
+            require forall I.  m.first <= I & (m.value(I) if I < m.upper else not_a_vote).maxr ~= 0 ->
+                two_a(I, m.value(I).maxr, m.value(I).maxv);
+            require forall I.  m.first <= I & (m.value(I) if I < m.upper else not_a_vote).maxr ~= 0 ->
+                (forall N, V. nset.member(N, q) & one_b(N, r, V) -> (votemap_seg(V).value(I) if I < votemap_seg(V).upper else not_a_vote).maxr <= m.value(I).maxr);
+
+            if ~active(r) {
+            active(r) := true;
+            two_a(I, r, V) := m.first <= I & I < m.upper & ((m.value(I).maxr ~= 0 & V = m.value(I).maxv) | (m.value(I).maxr = 0 & V = no_op));
+            available(r, I) := m.upper <= I;
+
+            call protocol0.receive_join_acks(r, q, m);
+            }
+        }
+        
+        action propose(r:round, i:inst, v:value) = {
+            if active(r) & available(r, i) {
+
+            available(r, i) := false;
+            two_a(i, r, v) := true;
+
+            call protocol0.propose(r, i, v);
+            }
+        }
+
+        action cast_vote(n:node, i:inst, r:round, v:value) = {
+            require two_a(i, r, v);
+            if ~left_round(n, r) {
+            
+            call join_round(n, r);
+
+            two_b(n, i, r, v) := true;
+
+            call protocol0.cast_vote(n, i, r, v);
+            }
+        }
+
+        action decide(i:inst, r:round, v:value, q:nset) = {
+            require nset.majority(q);
+            require forall N.  nset.member(N, q) -> two_b(N, i, r, v);
+
+            decision(i, v) := true;
+
+            call protocol0.decide(i, r, v, q);
+        }
+        
+        private {
+            invariant [safety] decision(I, V) -> protocol0.decision(I, V)
+
+            invariant left_round(N, R) <-> protocol0.left_round(N, R)
+            invariant one_b(N, R, V) -> protocol0.joined_round(N,R)
+            invariant two_a(I, R, V) <-> protocol0.proposal(I, R, V)
+            invariant two_b(N, I, R, V) <-> protocol0.vote(N, I, R, V)
+            invariant active(R) <-> protocol0.active(R)
+            invariant available(R, I) <-> protocol0.available(R, I)
+            invariant ~active(0)
+
+        }
+    }
+} with round, inst, not_a_vote_def, protocol0

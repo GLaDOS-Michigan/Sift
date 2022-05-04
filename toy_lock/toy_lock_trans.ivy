@@ -1,0 +1,91 @@
+#lang ivy1.7
+
+# This file contains the specification and implementation of the network shim is by the Toy Lock implementation.
+# The network shim just routes the different packet types to their designated handler.
+include udp
+include common
+object msg_kind = {
+    type this = {transfer, locked}
+}
+
+object msg = {
+    type this = struct {
+        m_kind : msg_kind,
+        m_epoch : epoch
+    }
+}
+
+instance net : udp_simple(node,msg)
+
+isolate trans = {
+    action send_transfer(src: node, dst: node, e: epoch)
+    action send_locked(src: node, dst: node, e: epoch)
+
+    action handle_transfer(dst: node, e: epoch)
+    action handle_locked(dst: node, e: epoch)
+
+    specification {
+        relation transfer(E:epoch, N: node)
+        relation locked(E: epoch, N: node)
+        
+        after init {
+            locked(E, D) := false;
+            transfer(E, N) := false;
+        }
+
+        before send_transfer {
+            transfer(e, dst) := true;
+        }
+
+        before send_locked {
+            locked(e, dst) := true;
+        }
+
+        before handle_transfer {
+            assert transfer(e, dst);
+        }
+
+        before handle_locked {
+            assert locked(e, dst);
+        }
+    }
+
+    implementation {
+        action debug_sending(src:node,dst:node,m:msg)
+        action debug_receiving(dst:node,m:msg)
+
+        implement net.recv(dst:node, m:msg) {
+            call debug_receiving(dst,m);
+            if m.m_kind = msg_kind.transfer {
+                call handle_transfer(dst, m.m_epoch)
+            }
+            else if m.m_kind = msg_kind.locked {
+                call handle_locked(dst, m.m_epoch)
+            }
+        }
+
+        implement send_transfer {
+            var m: msg;
+            m.m_kind := msg_kind.transfer;
+            m.m_epoch := e;
+            call debug_sending(src, dst, m);
+            call net.send(src, dst, m);
+        }
+
+        implement send_locked {
+            var m: msg;
+            m.m_kind := msg_kind.locked;
+            m.m_epoch := e;
+            call debug_sending(src, dst, m);
+            call net.send(src, dst, m);
+        }
+
+        private {
+            invariant net.spec.sent(M, D) & msg.m_kind(M) = msg_kind.transfer -> transfer(msg.m_epoch(M), D)
+            invariant net.spec.sent(M, D) & msg.m_kind(M) = msg_kind.locked -> locked(msg.m_epoch(M), D)
+        }
+    }
+} with net, node
+
+#import trans.debug_sending
+import trans.debug_receiving

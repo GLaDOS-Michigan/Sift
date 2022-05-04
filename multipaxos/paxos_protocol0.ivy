@@ -1,0 +1,113 @@
+#lang ivy1.7
+
+include paxos_spec
+
+include nodes
+include votemap_segment
+
+isolate protocol0 = {
+
+    relation left_round(N: node, R: round)
+    relation joined_round(N: node, R: round)
+
+    relation proposal(I: inst, R: round, V: value)
+    relation vote(N: node, I: inst, R: round, V: value)
+    relation decision(I: inst, V: value)
+
+    relation active(R: round)
+    relation available(R: round, I: inst)
+
+    specification {
+        after init {
+            left_round(N, R) := false;
+            joined_round(N, R) := false;
+            proposal(I, R, V) := false;
+            vote(N, I, R, V) := false;
+            decision(I, V) := false;
+            active(R) := false;
+            available(R, I) := false;
+        }
+
+        action join_round(n: node, r: round) = {
+            require ~left_round(n, r);
+
+            left_round(n, R) := left_round(n, R) | R < r;
+            joined_round(n, r) := true;
+        }
+
+        action receive_join_acks(r: round, q: nset, m: votemap_seg) = {
+            require m.first <= m.upper & nset.majority(q) & r ~= 0 & ~active(r);
+            require forall N:node. nset.member(N, q) -> joined_round(N, r);
+
+            # m must contain, for each instance I, a value proposed at maxr(I)<r and such that no member of the quorum q voted in between maxr(I) and r. Such values are said safe.
+            require forall I: inst. m.first <= I & (m.value(I) if I < m.upper else not_a_vote).maxr ~= 0 ->
+                                        proposal(I, m.value(I).maxr, m.value(I).maxv);
+            if forall I: inst. m.first <= I & (m.value(I) if I < m.upper else not_a_vote).maxr = 0 ->
+                                        forall N, R, V. ~(nset.member(N, q) & R < r & vote(N, I, R, V)) {
+            if forall I: inst. m.first <= I & (m.value(I) if I < m.upper else not_a_vote).maxr ~= 0 ->
+                                        (forall N, R, V. ~(nset.member(N, q) & R < r & vote(N, I, R, V) & R > m.value(I).maxr)) {
+
+            # activate round:
+            active(r) := true;
+            available(r, I) := m.upper <= I;
+            
+            # make proposals when a single safe value is known, and propose no-op when all values are safe (to fill holes), up to m.upper
+            proposal(I, r, V) := (m.first <= I & I < m.upper) & ((m.value(I).maxr ~= 0 & V = m.value(I).maxv) | (m.value(I).maxr = 0 & V = no_op));
+            }}
+        }
+        
+        action propose(r:round, i:inst, v:value) = {
+            require r ~= 0;
+            require active(r);
+            require available(r,i);
+
+            available(r,i) := false;
+            proposal(i, r, v) := true;
+        }
+
+        action cast_vote(n:node, i:inst, r:round, v:value) = {
+            require ~left_round(n,r);
+            require proposal(i, r, v);
+
+            vote(n, i, r, v) := true;
+        }
+
+        action decide(i:inst, r:round, v:value, q:nset) = {
+            require nset.majority(q);
+            require forall N. nset.member(N, q) -> vote(N, i, r, v);
+
+            call spec.learn(i, v);
+            decision(i, v) := true;
+        }
+
+
+        private {
+            invariant decision(I, V) <-> spec.learned(I, V)
+            # decisions come from quorums of votes:
+            invariant decision(I, V) -> exists Q, R . nset.majority(Q) & forall N:node. nset.member(N, Q) -> vote(N, I, R, V)
+            
+            # property of choosable and active: if either V2 is proposed in R2>R1 and V1~=V2 or I is available in R2 and V1 is not proposed in R2 at I, then V1 is not choosable in R1
+            invariant nset.majority(Q) & R1 < R2 & ((proposal(I, R2, V2) & V1 ~= V2) | available(R2, I)) -> (
+                exists N:node. nset.member(N, Q) & left_round(N, R1) & ~vote(N, I, R1, V1)
+            )
+
+            # propose only in active rounds
+            invariant proposal(I, R, V) -> active(R)
+            invariant proposal(I, R, V) -> ~available(R, I)
+        
+            # proposals are unique per round
+            invariant proposal(I, R, V1) & proposal(I, R, V2) -> V1 = V2
+
+            # only vote for proposed values
+            invariant vote(N, I, R, V) -> proposal(I, R, V)
+
+            # none is a reserved round
+            invariant ~(proposal(I, 0, V) | vote(N, I, 0, V))
+
+            # properties of joined_round, left_round
+            invariant joined_round(N, R2) & R1 < R2 -> left_round(N, R1)
+        }
+    }
+}
+with nset.majorities_intersect, round, inst, not_a_vote_def, spec
+

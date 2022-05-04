@@ -1,0 +1,44 @@
+#lang ivy1.7
+
+include timeout
+include toy_lock_spec
+include toy_lock_trans
+include ring
+
+isolate system = {
+    object server(self: node) = {
+        individual ep: epoch
+        individual held: bool
+        instance timer: timeout_sec
+
+        after init {
+            ep := 0;
+            held := self = 0;
+        }
+
+        implement timer.timeout {
+            if held & epoch.next(ep) > ep {
+                held := false;
+                call trans.send_transfer(self, ring.next(self), ep.next);
+            }
+        }
+
+        implement trans.handle_transfer(e: epoch) {
+            if e > ep {
+                held := true;
+                ep := e;
+                call trans.send_locked(self, self, e);
+                call spec.next(e, self);
+            }
+        }
+
+    }
+
+    invariant [safety] trans.locked(E, N) -> spec.lock_history(E, N)
+
+} with spec, epoch, trans
+
+import trans.handle_locked
+
+extract iso_impl(self:node) = node, system, system.server(self), trans(self), net(self), epoch, ring
+

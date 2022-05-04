@@ -1,0 +1,297 @@
+#lang ivy1.7
+
+include raft_protocol1
+include raft_trans
+include timeout
+include common
+
+isolate system = {
+    specification {
+        relation committed(IX: index, V: value)
+
+        after init {
+            committed(IX, V) := false;
+        }
+
+        action commit(n: node, ix: index) = {
+            committed(IX, V) := committed(IX, V) | (IX <= ix & V = server(n).mylogs.value(IX).logv);
+        }
+
+        invariant [safety] committed(IX, V) -> protocol1.committed(IX, V)
+    }
+
+    object server(self: node) = {
+        action propose(v: value) returns (ok : bool)
+        export propose
+
+        action query(i: index) returns (v: value)
+        export query
+
+        specification {
+            after query(ix: index) {
+                ensure ix < commit_ix -> committed(ix, v);
+            }
+        }
+
+        individual current_term: term
+        individual is_leader: bool
+
+        individual mylogs: logs
+        individual commit_ix: index
+
+        individual voters: nset
+        individual repliers: replierslog
+
+        after init {
+            current_term := 0;
+            is_leader := false;
+            mylogs := logs.empty;
+            commit_ix := 0;
+            voters := nset.emptyset;
+            repliers := replierslog.empty;
+        }
+
+        # object that starts new rounds when timing out on the leader and sends heartbeat messages when self is a leader.
+        object leader_election = {
+            individual my_time : time
+            individual last_heard_from_leader : time
+            individual timeout : time
+
+            instance sec : timeout_sec
+
+            action delay_leader_election
+            action is_leader_too_quiet returns (res: bool)
+            
+            after init {
+                my_time := 0;
+                last_heard_from_leader := my_time;
+                timeout := 5;
+            }
+
+            implement delay_leader_election {
+                last_heard_from_leader := my_time;
+            }
+            implement is_leader_too_quiet {
+                res := my_time - last_heard_from_leader >= timeout
+            }
+            
+            implement sec.timeout {
+                if ~is_leader {
+                    my_time := my_time.next;
+                    if is_leader_too_quiet {
+                        call announce_candidacy
+                    }
+                }
+                else {
+                    call trans.send_keepalive(self, current_term);
+                }
+            }
+
+            implement trans.handle_keepalive(t: term) {
+                if current_term < t {
+                    call move_to_term(t);
+                    call protocol1.move_to_term(self, t);
+                };
+                call delay_leader_election;
+            }
+        }
+
+        action move_to_term(t: term) = {
+            current_term := t;
+            is_leader := false;
+            voters := nset.emptyset;
+            repliers := replierslog.empty;
+            call leader_election.delay_leader_election;
+        }
+
+        action announce_candidacy = {
+            call move_to_term(current_term.next.add(typeconvert.from_nodeid_to_term(self)));
+
+            if mylogs.end > 0 {
+                # Has some history
+                var ix := mylogs.end.prev;
+                var logt := mylogs.get(ix).logt;
+                call trans.send_rqst_vote(self, current_term, ix, logt);
+                call protocol1.announce_candidacy(self, current_term, ix, logt);
+            } else {
+                # Empty history
+                call trans.send_rqst_vote_nolog(self, current_term);
+                call protocol1.announce_candidacy_nolog(self, current_term);
+            };
+       
+            # VOTE FOR ITSELF AUTOMATICALLY
+            call trans.send_vote_cand(self, current_term, self);
+        }
+
+        implement trans.handle_rqst_vote(src: node, t: term, logt: term, ix: index) {
+            if current_term < t {
+                if mylogs.end = 0 {
+                    call trans.send_vote_cand(self, t, src);
+                    call move_to_term(t);
+                    call protocol1.recv_rqst_vote(self, src, t, ix, logt, 0, 0, 0);
+                } else {
+                    var lastix := mylogs.end.prev;
+                    var lastlogt := mylogs.get(lastix).logt;
+
+                    if (lastlogt < logt) | (lastlogt = logt & lastix <= ix) {
+                        call trans.send_vote_cand(self, t, src);
+                        call move_to_term(t);
+                        call protocol1.recv_rqst_vote(self, src, t, ix, logt, mylogs.end, lastix, lastlogt);
+                    };
+                };
+            };
+        }
+
+        implement trans.handle_rqst_vote_nolog(src: node, t: term) {
+            if current_term < t & mylogs.end = 0 {
+                call trans.send_vote_cand(self, t, src);
+                call move_to_term(t);
+
+                call protocol1.recv_rqst_vote_nolog(self, src, t);
+            };
+        }
+
+        implement trans.handle_vote_cand(t:term, src:node) {
+            if ~is_leader & current_term = t {
+                voters := voters.add(src);
+
+                if voters.majority {
+                    is_leader := true;
+                    call protocol1.recv_votes(self, t, voters);
+                }
+            }
+        }
+
+        implement propose(v: value) returns (ok : bool) {
+            if is_leader {
+                var e: log_entry;
+                e.logt := current_term;
+                e.logv := v;
+
+                var ix := mylogs.end;
+                mylogs := mylogs.append(e);
+                call protocol1.append_new_entry(self, v, current_term, ix);
+
+                var dummy_recovernode : node;
+                call replicate_entry(ix, false, dummy_recovernode);
+                ok := true;
+            } else {
+                ok := false;
+            };
+        }
+
+        action replicate_entry(ix:index, isrecover:bool, recovernode: node) = {
+            require is_leader;
+            require mylogs.end > ix;
+
+            var previx : index;
+            var prevt : term;
+            var e := mylogs.get(ix);
+
+            if ix ~= 0 {
+                previx := ix.prev;
+                prevt := mylogs.get(previx).logt;
+            } else {
+                prevt := 0;
+            };
+
+            call trans.send_append(self, current_term, ix, e.logv, e.logt, prevt, isrecover, recovernode);
+            call protocol1.replicate_entry(self, current_term, ix, e.logt, previx, prevt);
+
+            call trans.send_append_reply(self, self, current_term, ix, false);
+        }
+
+        implement trans.handle_append(src: node, t: term, ix: index, v: value, logt: term, plogt: term, isrecover: bool) {
+            if current_term < t {
+                call move_to_term(t);
+                call protocol1.move_to_term(self, t);
+            };
+
+            if current_term = t {
+                var preix: index;
+                if ix > 0 {
+                    preix := ix.prev;
+                };
+                
+                if ix >= commit_ix {
+                if ix > 0 -> (mylogs.end > preix & mylogs.value(preix).logt = plogt) {
+                    var mylogt: term;
+                    if mylogs.end > ix {
+                        mylogt := mylogs.get(ix).logt;
+                    };
+                    if mylogs.end > ix -> mylogt ~= logt {
+                        var e: log_entry;
+                        e.logt := logt;
+                        e.logv := v;
+    
+                        mylogs := mylogs.resize(ix, e);
+                        mylogs := mylogs.append(e);
+
+                        call trans.send_append_reply(self, src, t, ix, isrecover);
+                        call protocol1.recv_append(self, t, ix, v, logt, preix, plogt);
+                    };
+                } else {
+                    call trans.send_nack(self, src, t, ix.prev);
+                }
+                }
+            };
+        }
+
+        implement trans.handle_nack(n:node, t:term, ix: index) {
+            if current_term = t & is_leader & mylogs.size > ix {
+                call replicate_entry(ix, true, n);
+            };
+        }
+
+        implement trans.handle_append_reply(src: node, t:term, ix: index, isrecover: bool) {
+            if current_term = t & is_leader {
+                if isrecover & mylogs.end > ix.next {
+                    call replicate_entry(ix.next, isrecover, src);
+                };
+
+                if mylogs.end > ix & mylogs.value(ix).logt = t & commit_ix <= ix {
+                    if repliers.end <= ix {
+                        repliers := repliers.resize(ix.next, nset.emptyset)
+                    };
+                    var rep := repliers.get(ix).add(src);
+                    repliers := repliers.set(ix, rep);
+
+                    if rep.majority {
+                        commit_ix := ix.next;
+                        call commit(self, ix);
+
+                        call protocol1.recv_append_reply(self, t, ix, rep);
+                    };
+                };
+            };
+        }
+
+        implement query(i: index) returns (v: value) {
+            if i < commit_ix {
+                v := mylogs.get(i).logv;
+            }
+        }
+    }
+
+    invariant trans.rqst_vote(S, T, I, LOGT) <-> protocol1.rqst_vote(S, T, I, LOGT)
+    invariant trans.rqst_vote_nolog(S, T) <-> protocol1.rqst_vote_nolog(S, T)
+    invariant trans.vote_cand(S, T, D) <-> protocol1.vote_cand(S, T, D)
+    invariant trans.append(T, IX, V, LOGT, PLOGT) <-> protocol1.append(T, IX, V, LOGT, PLOGT)
+    invariant trans.append_reply(S, T, IX) <-> protocol1.append_reply(S, T, IX)
+
+    invariant server(N).current_term = T <-> protocol1.current_term(N, T)
+    invariant server(N).current_term > T <-> protocol1.left_term(N, T)
+    invariant server(N).is_leader <-> protocol1.leader(N)
+
+    invariant IX < server(N).mylogs.end <-> protocol1.log_filled(N, IX)
+    invariant IX < server(N).mylogs.end -> (server(N).mylogs.value(IX).logt = T <-> protocol1.log_term(N, IX, T))
+    invariant IX < server(N).mylogs.end -> (server(N).mylogs.value(IX).logv = protocol1.log_val(N, IX))
+
+    invariant nset.member(NN, server(N).voters) -> trans.vote_cand(NN, server(N).current_term, N)
+    invariant IX < server(N).repliers.end & nset.member(NN, server(N).repliers.value(IX)) -> trans.append_reply(NN, server(N).current_term, IX)
+
+    invariant server(N).commit_ix <= server(N).mylogs.end
+    invariant IX < server(N).commit_ix -> committed(IX, server(N).mylogs.value(IX).logv)
+} with nset, trans, logs, replierslog, index, term, nset, protocol1, time
+
+extract iso_impl(self: node) = system, system.server(self), index, term, nset, trans(self), net(self), node, replierslog, typeconvert, logs, time

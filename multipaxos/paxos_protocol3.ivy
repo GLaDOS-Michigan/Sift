@@ -1,0 +1,212 @@
+#lang ivy1.7
+
+include paxos_protocol2
+
+isolate protocol3 = {
+    relation one_a(N: node, R: round, I: inst)
+    relation one_b(S: node, D: node, R: round, V: votemap_seg)
+    relation two_a(I: inst, R: round, V: value)
+    relation two_b(S: node, I: inst, R: round, V: value)
+    relation decision(I: inst, V: value)
+
+    function current_round(N: node) : round
+    relation round_active(N: node)
+    function next_inst(N: node) : inst
+    function my_votes(N: node) : votemap
+    function joined(N: node): nset
+    function joined_votes(N: node) : votemap_seg
+
+    function inst_status(N: node): ballot_status_array
+
+    specification {
+        after init {
+            one_a(N, R, I) := false;
+            one_b(S, D, R, V) := false;
+            two_a(R, I, V) := false;
+            two_b(S, R, I, V) := false;
+            decision(I, V) := false;
+
+            current_round(N) := 0;
+            round_active(N) := false;
+            next_inst(N) := 0;
+            inst_status(N) := ballot_status_array.empty;
+
+            my_votes(N) := votemap.empty;
+            joined(N) := empty_nset;
+            joined_votes(N) := votemap_seg.empty;
+        }
+
+        action start_round(n: node, r: round, i: inst, init_joined: nset, v: votemap_seg) = {
+            require leader_of(n, r);
+            require current_round(n) < r;
+
+            require nset.member(N, init_joined) -> N = n;
+            require v.first = i;
+            require v.upper = my_votes(n).end if i <= my_votes(n).end else i;
+            require v.first <= I & I < v.upper -> v.value(I) = my_votes(n).value(I);
+
+            one_a(n, r, i) := true;
+            current_round(n) := r;
+            inst_status(n) := ballot_status_array.empty;
+            round_active(n) := false;
+
+            joined(n) := init_joined;
+            joined_votes(n) := v;
+            one_b(n, n, r, v) := true;
+
+            call protocol2.start_round(n, r, i, v);
+        }
+
+        action join_round(n: node, r: round) = {
+            require current_round(n) < r;
+
+            current_round(n) := r;
+            inst_status(n) := ballot_status_array.empty;
+            round_active(n) := false;
+            joined(n) := empty_nset;
+            call protocol2.join_round(n, r);
+        }
+
+        action receive_one_a(n: node, src: node, r: round, i: inst, v: votemap_seg) = {
+            require current_round(n) < r;
+            require one_a(src, r, i);
+
+            require v.first = i;
+            require v.upper = my_votes(n).end if i <= my_votes(n).end else i;
+            require v.first <= I & I < v.upper -> v.value(I) = my_votes(n).value(I);
+
+            current_round(n) := r;
+            inst_status(n) := ballot_status_array.empty;
+            round_active(n) := false;
+            joined(n) := empty_nset;
+
+            one_b(n, src, r, v) := true;
+            call protocol2.receive_one_a(n, src, r, i, v);
+        }
+
+        action receive_one_b(n: node, src: node, r: round, m: votemap_seg, new_joined: nset, new_votes: votemap_seg) = {
+            require one_b(src, n, r, m);
+            require r = current_round(n);
+            require ~round_active(n);
+
+            require nset.member(N, new_joined) -> N = src | nset.member(N, joined(n));
+
+            require new_votes.first = m.first;
+            require new_votes.first <= new_votes.upper;
+            require new_votes.upper = m.upper if m.upper >= joined_votes(n).upper else joined_votes(n).upper;
+            require new_votes.first <= I & I < new_votes.upper -> new_votes.value(I) = (m.value(I) if I < m.upper else not_a_vote)
+                                                                                        if ((m.value(I) if I < m.upper else not_a_vote).maxr > (joined_votes(n).value(I) if I < joined_votes(n).upper else not_a_vote).maxr)
+                                                                                        else (joined_votes(n).value(I) if I < joined_votes(n).upper else not_a_vote);
+
+            joined(n) := new_joined;
+            joined_votes(n) := new_votes;
+            
+            if joined(n).majority {
+                round_active(n) := true;
+                two_a(I, r, V) := new_votes.first <= I & I < new_votes.upper & ((new_votes.value(I).maxr ~= 0 & V = new_votes.value(I).maxv) | (new_votes.value(I).maxr = 0 & V = no_op));
+                next_inst(n) := new_votes.upper;
+
+                call protocol2.receive_join_acks(n, r, new_joined, new_votes);
+
+            };
+        }
+        
+        action propose(n: node, next_i:inst, v:value) = {
+            require leader_of(n, current_round(n)) & round_active(n);
+            require next_i > next_inst(n);
+
+            two_a(next_inst(n), current_round(n), v) := true;
+
+            call protocol2.propose(n, next_i, v);
+            next_inst(n) := next_i;
+        }
+
+        action cast_vote(n:node, i:inst, r:round, v:value, new_votes: votemap) = {
+            require current_round(n) <= r;
+            require two_a(i, r, v);
+
+            require new_votes.end > i & new_votes.end >= my_votes(n).end;
+            require I < my_votes(n).end & I ~= i -> new_votes.value(I) = my_votes(n).value(I);
+            require my_votes(n).end <= I & I < new_votes.end & I ~= i -> new_votes.value(I) = not_a_vote;
+
+            require new_votes.value(i).maxr = r & new_votes.value(i).maxv = v;
+            
+            if current_round(n) < r {
+                call join_round(n, r);
+            };
+
+            my_votes(n) := new_votes;
+            two_b(n, i, r, v) := true;
+
+            call protocol2.cast_vote(n, i, r, v);
+        }
+
+       action recv_two_b(self: node, n:node, i:inst, r:round, v:value, inst: ballot_status_array) = {
+            require two_b(n, i, r, v);
+
+            require inst.end > i & inst.end >= inst_status(self).end;
+
+            require I < inst_status(self).end & I ~= i -> inst_status(self).value(I) = inst.value(I);
+            require inst_status(self).end <= I & I < inst.end & I ~= i -> inst.value(I) = init_status;
+
+            require r ~= current_round(self) & i >= inst_status(self).end -> inst.value(i) = init_status;
+            require r ~= current_round(self) & i < inst_status(self).end -> inst.value(i) = inst_status(self).value(i);
+
+            require i < inst_status(self).end & inst_status(self).value(i).decided -> inst.value(i) = inst_status(self).value(i);
+
+            require r = current_round(self) & ~(inst_status(self).value(i) if i < inst_status(self).end else init_status).decided -> 
+                (inst.value(i).active & inst.value(i).proposal = v);
+            require r = current_round(self) & ~(inst_status(self).value(i) if i < inst_status(self).end else init_status).decided -> 
+                (nset.member(N, inst.value(i).voters) <-> (N = n | nset.member(N, (inst_status(self).value(i) if i < inst_status(self).end else init_status).voters)));
+
+            require r = current_round(self) & ~(inst_status(self).value(i) if i < inst_status(self).end else init_status).decided -> (inst.value(i).decided -> inst.value(i).voters.majority);
+
+            if r = current_round(self) & ~(inst_status(self).value(i) if i < inst_status(self).end else init_status).decided & inst.value(i).voters.majority {
+                decision(i, v) := true;
+
+
+            };
+
+            inst_status(self) := inst;
+            call protocol2.recv_two_b(self, n, i, r, v, inst);
+        }
+
+
+        private {
+            invariant [safety] decision(I, V) -> protocol2.decision(I, V)
+
+            invariant one_a(N, R, V) <-> protocol2.one_a(N, R, V)
+            invariant one_b(S, D, R, V) <-> protocol2.one_b(S, D, R, V)
+            invariant two_a(I, R, V) <-> protocol2.two_a(I, R, V)
+            invariant two_b(S, I, R, V) <-> protocol2.two_b(S, I, R, V)
+            invariant current_round(N) = protocol2.current_round(N)
+            invariant round_active(N) = protocol2.round_active(N)
+            invariant next_inst(N) = protocol2.next_inst(N)
+
+            invariant one_b(S, D, R, V) -> leader_of(D, R)
+            invariant ~one_b(S, D, 0, V)
+            invariant nset.member(N1, joined(N)) -> exists V. one_b(N1, N, current_round(N), V)
+            invariant one_b(S, D, R, V1) & one_b(S, D, R, V2) -> V1 = V2
+
+            invariant (my_votes(N).value(I) if I < my_votes(N).end else not_a_vote).maxr ~= 0 -> two_a(I, my_votes(N).value(I).maxr, my_votes(N).value(I).maxv)
+            invariant two_b(N, I, R, V) -> (my_votes(N).value(I) if I < my_votes(N).end else not_a_vote).maxr >= R
+
+            invariant one_b(N1, N, current_round(N), V) -> votemap_seg(V).first = joined_votes(N).first
+            invariant joined_votes(N).first <= I & (joined_votes(N).value(I) if I < joined_votes(N).upper else not_a_vote).maxr ~= 0 -> two_a(I, joined_votes(N).value(I).maxr, joined_votes(N).value(I).maxv)
+            invariant nset.member(N1, joined(N)) & one_b(N1, N, current_round(N), VOTES) & joined_votes(N).first <= I -> (votemap_seg(VOTES).value(I) if I < votemap_seg(VOTES).upper else not_a_vote).maxr <= (joined_votes(N).value(I) if I < joined_votes(N).upper else not_a_vote).maxr
+            invariant one_b(S, D, R, VOTES) & votemap_seg(VOTES).first <= I & (votemap_seg(VOTES).value(I) if I < votemap_seg(VOTES).upper else not_a_vote).maxr ~= 0 -> two_a(I, votemap_seg(VOTES).value(I).maxr, votemap_seg(VOTES).value(I).maxv)
+
+            invariant inst_status(N).end = protocol2.inst_status(N).end
+            invariant inst_status(N).end ~= 0 -> inst_status(N) = protocol2.inst_status(N)
+
+            invariant [ic3po_other9]        (forall V1, N1, I1 . ((protocol3.two_a(I1, protocol3.current_round(N1), V1) & leader_of(N1, protocol3.current_round(N1))) -> protocol2.round_active(N1)))
+            invariant [ic3po_global9_7]     (forall V1, R1, N1, I1 . ((protocol3.two_a(I1, R1, V1) & leader_of(N1, R1)) -> ((R1 < protocol3.current_round(N1)) | (protocol3.current_round(N1) = R1))))
+            invariant [ic3po_global7_17]    (forall I1, N1 . ((I1 < votemap.end(protocol3.my_votes(N1))) -> ((maxr(votemap.value(protocol3.my_votes(N1), I1)) < protocol3.current_round(N1)) | (protocol3.current_round(N1) = maxr(votemap.value(protocol3.my_votes(N1), I1))))))
+            invariant [ic3po_global3_3]     (forall I1, N1, R1 . (protocol3.one_a(N1, R1, I1) -> leader_of(N1, R1)))
+            invariant [ic3po_global3_4]     (forall N2, N1, R1, V1 . (protocol2.one_b(N1, N2, R1, V1) -> (protocol3.one_a(N2, R1, votemap_seg.first(V1)) | (N1 = N2))))
+            invariant [ic3po_global2_4]     (forall R1, I1, N1 . (protocol3.one_a(N1, R1, I1) -> ((R1 < protocol2.current_round(N1)) | (protocol2.current_round(N1) = R1))))
+            invariant [ic3po_other10]       (forall I1, N1 . (protocol3.one_a(N1, protocol3.current_round(N1), I1) -> (votemap_seg.first(protocol3.joined_votes(N1)) = I1)))
+            invariant [ic3po_global3_6]     (forall N2, N1, R1, V1 . (protocol3.one_b(N1, N2, R1, V1) -> ((R1 < protocol3.current_round(N1)) | (protocol3.current_round(N1) = R1))))
+        }
+    }
+} with round, inst, not_a_vote_def, init_status_def, ballot_status_array, protocol2, round_leader, votemap_seg, votemap, empty_nset_def

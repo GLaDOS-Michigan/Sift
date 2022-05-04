@@ -1,0 +1,23 @@
+#lang ivy1.7
+
+include common
+
+isolate spec = {
+    relation learned(I: inst, V: value)
+ 
+    after init {
+        learned(I, V) := false;
+    }
+
+    action learn(i: inst, v: value) = {
+        if forall V. V ~= v -> ~learned(i, V) {
+            learned(i, v) := true;
+        }
+    }
+
+    specification {
+        # safety property:
+        invariant learned(I, V1) & learned(I, V2) -> V1 = V2
+    }
+
+}

@@ -1,0 +1,189 @@
+#lang ivy1.7
+
+include raft_protocol0
+
+isolate protocol1 = {
+    relation rqst_vote(S: node, T: term, I: index, LOGT: term)
+    relation rqst_vote_nolog(S: node, T: term)
+    relation vote_cand(S: node, T: term, D: node)
+    relation append(T: term, IX: index, V: value, LOGT: term, PLOGT: term)
+    relation append_reply(S: node, T: term, IX: index)
+    relation committed(IX: index, V: value)
+    
+    relation current_term(N: node, T: term)
+    relation left_term(N: node, T: term)
+    relation leader(N: node)
+
+    relation log_filled(N: node, IX: index)
+    relation log_term(N: node, IX: index, T: term)
+    function log_val(N: node, IX: index): value
+
+    after init {
+        rqst_vote(S, T, I, LOGT) := false;
+        rqst_vote_nolog(S, T) := false;
+        vote_cand(S, T, D) := false;
+        append(T, IX, V, LOGT, PLOGT) := false;
+        append_reply(S, T, IX) := false;
+        committed(IX, V) := false;
+
+        current_term(N, T) := T = 0;
+        left_term(N, T) := false;
+        leader(N) := false;
+
+        log_filled(N, IX) := false;
+        log_term(N, IX, T) := false;
+    }
+
+    action move_to_term(n: node, t: term) = {
+        if ~current_term(n, t) & ~left_term(n, t) {
+            current_term(n, T) := T = t;
+            left_term(n, T) := T < t;
+            leader(n) := false;
+
+            call protocol0.move_to_term(n, t);
+        };
+    }
+
+    action announce_candidacy(n: node, t: term, logix: index, logt: term) = {
+        require ~current_term(n, t) & ~left_term(n, t);
+        require IX > logix -> ~log_filled(n, IX);
+        require log_filled(n, logix);
+        require log_term(n, logix, logt);
+
+        rqst_vote(n, t, logix, logt) := true;
+        vote_cand(n, t, n) := true;
+
+        call protocol0.announce_candidacy(n, t, logix, logt);
+        call move_to_term(n, t);
+    }
+
+    action announce_candidacy_nolog(n: node, t: term) = {
+        require ~current_term(n, t) & ~left_term(n, t);
+        require ~log_filled(n, IX);
+
+        rqst_vote_nolog(n, t) := true;
+        vote_cand(n, t, n) := true;
+
+        call protocol0.announce_candidacy_nolog(n, t);
+        call move_to_term(n, t);
+    }
+
+    action recv_rqst_vote(n: node, s: node, t: term, ix: index, logt: term, logend: index, lastix: index, logendt: term) = {
+        require rqst_vote(s, t, ix, logt);
+        require ~current_term(n, t) & ~left_term(n, t);
+        
+        require IX < logend <-> log_filled(n, IX);
+        require logend > 0 -> index.succ(lastix, logend);
+        require logend > 0 -> log_term(n, lastix, logendt);
+        require logend = 0 | (logendt < logt) | (logendt = logt & ix >= lastix);
+
+        vote_cand(n, t, s) := true;
+
+        call protocol0.recv_rqst_vote(n, s, t, ix, logt);
+        call move_to_term(n, t);
+    }
+
+    action recv_rqst_vote_nolog(n: node, s: node, t: term) = {
+        require rqst_vote_nolog(s, t);
+        require ~current_term(n, t) & ~left_term(n, t);
+        require ~log_filled(n, IX);
+        
+        vote_cand(n, t, s) := true;
+
+        call protocol0.recv_rqst_vote_nolog(n, s, t);
+        call move_to_term(n, t);
+    }
+
+    action recv_votes(n: node, t: term, q: nset) = {
+        require current_term(n, t);
+        require ~leader(n);
+        require q.majority;
+        require nset.member(N, q) -> vote_cand(N, t, n);
+
+        leader(n) := true;
+        call protocol0.recv_votes(n, t, q);
+    }
+
+    action append_new_entry(n: node, v: value, t: term, ix: index) = {
+
+        require leader(n);
+        require current_term(n, t);
+        require log_filled(n, IX) <-> IX < ix;
+
+        log_filled(n, ix) := true;
+        log_term(n, ix, T) := t = T;
+        log_val(n, ix) := v;
+
+        call protocol0.append_new_entry(n, v, t, ix);
+    }
+
+    action replicate_entry(n: node, t: term, ix: index, logt: term, lastix: index, lastlogt: term) = {
+        require leader(n);
+        require current_term(n, t);
+        require log_filled(n, ix);
+        require log_term(n, ix, logt);
+        require ix > 0 -> index.succ(lastix, ix);
+        require ix > 0 -> log_term(n, lastix, lastlogt);
+        require ix = 0 -> lastlogt = 0;
+
+        append(t, ix, log_val(n, ix), logt, lastlogt) := true;
+        append_reply(n, t, ix) := true;
+
+        call protocol0.replicate_entry(n, t, ix, logt, lastix, lastlogt);
+    }
+
+    action recv_append(n: node, t: term, ix: index, logv: value, logt: term, lastix: index, lastlogt: term) = {
+        require append(t, ix, logv, logt, lastlogt);
+        require current_term(n, t);
+
+        require ix > 0 -> index.succ(lastix, ix);
+        require ix > 0 -> log_term(n, lastix, lastlogt);
+        if ~log_term(n, ix, logt) {
+
+        log_filled(n, IX) := IX <= ix;
+        log_term(n, IX, T) := (IX < ix & log_term(n, IX, T)) | (IX = ix & T = logt);
+        log_val(n, ix) := logv;
+
+        append_reply(n, t, ix) := true;
+
+        call protocol0.recv_append(n, t, ix, logv, logt, lastix, lastlogt);
+        }
+    }
+
+    action recv_append_reply(n: node, t: term, ix: index, q: nset) = {
+        require q.majority;
+        require forall N. nset.member(N, q) -> append_reply(N, t, ix);
+
+        require leader(n);
+        require current_term(n, t);
+        require log_term(n, ix, t);
+
+        committed(IX, V) := committed(IX, V) | (IX <= ix & V = log_val(n, IX));
+
+        call protocol0.recv_append_reply(n, t, ix, q);
+    }
+
+    private {
+        invariant [safety] committed(IX, V) -> protocol0.committed(IX, V)
+
+        invariant rqst_vote(S, T, I, LOGT) <-> protocol0.rqst_vote(S, T, I, LOGT)
+        invariant rqst_vote_nolog(S, T) <-> protocol0.rqst_vote_nolog(S, T)
+        invariant vote_cand(S, T, D) <-> protocol0.vote_cand(S, T, D)
+        invariant append(T, IX, V, LOGT, PLOGT) <-> protocol0.append(T, IX, V, LOGT, PLOGT)
+        invariant append_reply(S, T, IX) <-> protocol0.append_reply(S, T, IX)
+    
+        invariant current_term(N, T) <-> protocol0.current_term(N, T)
+        invariant left_term(N, T) <-> protocol0.left_term(N, T)
+        invariant leader(N) <-> protocol0.leader(N)
+
+        invariant log_filled(N, IX) <-> protocol0.log_filled(N, IX)
+        invariant log_term(N, IX, T) <-> protocol0.log_term(N, IX, T)
+        invariant log_filled(N, IX) -> (log_val(N, IX) = protocol0.log_val(N, IX))
+
+        invariant log_term(N, IX, T) -> log_filled(N, IX)
+        invariant log_filled(N, IX1) & IX2 < IX1 -> log_filled(N, IX2)
+        invariant log_term(N, IX1, T1) & log_term(N, IX2, T2) & IX1 < IX2 -> T1 <= T2
+        invariant log_term(N, IX, T1) & log_term(N, IX, T2) -> T1 = T2
+
+    }
+} with protocol0, nset, index, term

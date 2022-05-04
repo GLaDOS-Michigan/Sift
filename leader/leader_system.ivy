@@ -1,0 +1,36 @@
+#lang ivy1.7
+
+include leader_trans
+include leader_spec
+include timeout
+include ring
+
+isolate system = {
+    object server(self: node) = {
+        instance timer : timeout_sec
+
+        implement timer.timeout {
+            call trans.send_forward(self, ring.next(self), idn(self));
+        }
+
+        implement trans.recv_forward(i: id) {
+            if i = idn(self) {  # Found a leader
+                call spec.elect(self);
+                call trans.send_elected(self, self);
+            } else if i > idn(self) { # pass message to next node
+                call trans.send_forward(self, ring.next(self), i);
+            }
+        }
+    }
+
+    invariant [safety] trans.elected(N) -> spec.leader(N)
+
+invariant [ic3po_global4_26]    (forall N3, N1, N2 . (ring.btw(N2, N3, N1) -> ((idn(N2) < idn(N3)) -> ~trans.forward(idn(N2), N1))))
+invariant [ic3po_global4_25]    (forall N3, N1, N2 . ((ring.btw(N2, N3, N1) & trans.forward(idn(N2), N1)) -> trans.forward(idn(N2), N3)))
+invariant [ic3po_global1_1]     (forall N1 . (spec.leader(N1) -> trans.forward(idn(N1), N1)))
+invariant [ic3po_other2]        (forall I1, N1 . (trans.forward(idn(N1), N1) -> ~(idn(N1) < I1)))
+} with ring, spec, trans, id_injective, id
+
+import trans.recv_elected
+
+extract iso_impl(me:node) = system, system.server(me), net(me), trans(me), idn(me), node, id, ring

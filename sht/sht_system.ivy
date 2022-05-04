@@ -1,0 +1,133 @@
+#lang ivy1.7
+
+include sht_spec
+include common
+include sht_trans
+include delmap
+
+isolate system = {
+    object server(self: node) = {
+        function hash(K: key) : value
+        instance dm: delegation_map(key, node)
+        individual req_no: reqnum
+
+        isolate iso_dm = dm with key
+
+        action set(k: key, d: value)
+        action get(k:key)
+        action delegate_(dst: node, k: key)
+
+        import action answer(k: key, v: value, id: reqnum)
+
+        after init {
+            req_no := 0;
+            hash(K) := 0;
+        }
+
+        implement set(k: key, d: value) {
+            var r: req;
+            r.src := self;
+            r.rid := req_no;
+            r.rtype := write;
+            r.rkey := k;
+            r.rdata := d;
+            req_no := req_no.next;
+
+            var owner := dm.get(k);
+            if owner = self {
+                hash(r.rkey) := r.rdata;
+                call spec.commit(r, r);
+                call trans.send_reply(self, r.src, r);
+            } else {
+                call trans.send_request(self, owner, r);
+            };
+        }
+        
+        implement get(k:key) {
+            var r: req;
+            r.src := self;
+            r.rid := req_no;
+            r.rtype := read;
+            r.rkey := k;
+            req_no := req_no.next;
+
+            var owner := dm.get(k);
+            if owner = self {
+                var rep := r;
+                rep.rdata := hash(k);
+                call spec.commit(r, rep);
+                call trans.send_reply(self, r.src, rep);
+            } else {
+                call trans.send_request(self, owner, r);
+            };
+        }
+
+
+        implement delegate_(dst: node, k: key) {
+            if dst ~= self & dm.get(k) = self {
+                call dm.set(k, dst);
+                
+                call trans.send_delegate(self, dst, k, hash(k));
+            };
+        }
+            
+        implement trans.handle_request(r: req) {
+            var owner := dm.get(r.rkey);
+            if owner = self {
+                var rep := r;
+                if r.rtype = read {
+                    rep.rdata := hash(r.rkey);
+                } else {
+                    hash(r.rkey) := r.rdata;
+                };
+                call spec.commit(r, rep);
+                call trans.send_reply(self, r.src, rep);
+            } else {
+                call trans.send_request(self, owner, r);
+            };
+        }
+
+        implement trans.handle_reply(r: req) {
+            call answer(r.rkey, r.rdata, r.rid);
+        }
+
+        implement trans.handle_delegate(k: key, v: value) {
+            call dm.set(k, self);
+            hash(k) := v;
+        }
+    }
+
+
+    invariant [safety] trans.replied(R, D) -> spec.replies(R)
+
+# enable trans.send_delegate
+# server(N).dm.map(K, N) & shard.skey(S) = K & shard.sdata(S) = server(N).hash(K) & X ~= N -> ~trans.delegated(S, X)
+# By the design, we can simplify it to 
+# server(N).dm.map(K, N) & shard.skey(S) = K -> ~trans.delegated(S, X)
+# which is equivelant to below:
+    invariant trans.delegated(K, V, X) -> ~server(N).dm.map(K, N)
+
+# unique requests and replies to enable trans.send_reply, trans.send_request
+#enable trans.send_reply from trans.handle_request
+    invariant ~(trans.requested(R1, D1) & trans.replied(R2, D2) & req.src(R1) = req.src(R2) & req.rid(R1) = req.rid(R2))
+# enable trans.send_request from trans.handle_request
+    invariant trans.requested(R1, D1) & trans.requested(R2, D2) & req.src(R1) = req.src(R2) & req.rid(R1) = req.rid(R2) -> R1 = R2 & D1 = D2
+# enable trans.send_request from system.set, system.get
+    invariant trans.requested(R, D) -> req.rid(R) < server(req.src(R)).req_no
+# enable trans.send_reply from system.set, system.get
+    invariant trans.replied(R, D) -> req.src(R) = D & req.rid(R) < server(req.src(R)).req_no
+
+    invariant [ic3po_other1]        (forall N1, V1, K1 . (trans.delegated(K1, V1, N1) -> (spec.map(K1) = V1)))
+    invariant [ic3po_global4]       (forall R1, N1 . (trans.requested(R1, N1) -> ((req.rtype(R1) = write) | (req.rtype(R1) = read) | (write = read))))
+    invariant [ic3po_other3]        (forall N1, R1 . (spec.requests(R1) -> ~trans.requested(R1, N1)))
+    invariant [ic3po_other2]        (forall N1, K1 . (system.server.dm.map(N1, K1, N1) -> (spec.map(K1) = system.server.hash(N1, K1))))
+    invariant [ic3po_global2]       (forall N1, V1, N2, K1 . ((trans.delegated(K1, V1, N1) & trans.delegated(K1, V1, N2)) -> (N1 = N2)))
+    invariant [ic3po_global11]      (forall R1 . (spec.requests(R1) -> (req.rid(R1) < system.server.req_no(req.src(R1)))))
+    invariant [ic3po_global3]       (forall N2, N3, K1, N1 . ((system.server.dm.map(N3, K1, N3) & system.server.dm.map(N1, K1, N1)) -> (system.server.dm.map(N2, K1, N3) | (N1 = N3))))
+} with spec, trans, key, reqnum
+
+export system.server.set
+export system.server.get
+export system.server.delegate_
+
+extract impl(me: node) = system.server(me), trans(me), net(me), seqnum, node, impl_defs, key, reqnum

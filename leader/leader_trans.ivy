@@ -1,0 +1,89 @@
+#lang ivy1.7
+
+# This file contains the specification and implementation of the network shim is by the Toy Lock implementation.
+# The network shim just routes the different packet types to their designated handler.
+include udp
+include common
+
+object msg_kind = {
+    type this = {forward, elected}
+}
+
+object msg = {
+    type this = struct {
+        m_kind : msg_kind,
+        m_id : id
+    }
+}
+
+instance net : udp_simple(node, msg)
+
+isolate trans = {
+
+    action send_forward(src: node, dst: node, i:id)
+    action send_elected(src: node, dst: node)
+
+    action recv_forward(dst: node, i: id)
+    action recv_elected(dst: node)
+
+    specification {
+        relation forward(I: id, N: node)
+        relation elected(N: node)
+
+        after init {
+            forward(I, D) := false;
+            elected(N) := false
+        }
+
+        before send_forward {
+            forward(i, dst) := true;
+        }
+
+        before recv_forward {
+            assert forward(i, dst);
+        }
+
+        before send_elected {
+            elected(dst) := true;
+        }
+
+        before recv_elected {
+            assert elected(dst);
+        }
+    }
+
+    implementation {
+        action debug_sending(src:node,dst:node,m:msg)
+        action debug_receiving(dst:node,m:msg)
+
+        implement net.recv(dst:node,m:msg) {
+            call debug_receiving(dst,m);
+            if m.m_kind = msg_kind.forward {
+                call recv_forward(dst, m.m_id);
+            } else if m.m_kind = msg_kind.elected {
+                call recv_elected(dst);
+            }
+        }
+
+        implement send_forward {
+            var m: msg;
+            m.m_kind := msg_kind.forward;
+            m.m_id := i;
+            call debug_sending(src, dst, m);
+            call net.send(src, dst, m);
+        }
+
+        implement send_elected {
+            var m: msg;
+            m.m_kind := msg_kind.elected;
+            call debug_sending(src, dst, m);
+            call net.send(src, dst, m);
+        }
+
+        invariant net.spec.sent(M, D) & msg.m_kind(M) = msg_kind.forward -> forward(msg.m_id(M), D)
+        invariant net.spec.sent(M, D) & msg.m_kind(M) = msg_kind.elected -> elected(D)
+    }
+} with net, id
+
+import trans.debug_sending
+import trans.debug_receiving

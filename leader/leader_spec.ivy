@@ -1,0 +1,21 @@
+#lang ivy1.7
+
+include common
+
+isolate spec = {
+    relation leader(N: node)
+
+    after init {
+        leader(N) := false;
+    }
+
+    action elect(n: node) = {
+        if forall N. N ~= n -> ~leader(N) {
+            leader(n) := true
+        }
+    }
+#    private {
+#        invariant leader(N1) & leader(N2) -> N1 = N2
+#    }
+
+} with node

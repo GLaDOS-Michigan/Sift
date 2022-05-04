@@ -1,0 +1,226 @@
+#lang ivy1.7
+
+include common
+include tcp
+
+type msgkind = {rqvote, rqvotenolog, vtcandidate, appendmsg, appendrep, keepalive, nack}
+type msg =  struct {
+    m_kind : msgkind,
+    m_ix : index,
+    m_term : term,
+    m_node : node,
+    m_val : value,
+    m_logt : term,
+    m_prevlogt : term,
+    m_isrecover : bool
+}
+
+instance net : simple_tcp(node, msg)
+
+isolate trans = {
+    relation rqst_vote(S: node, T: term, I: index, LOGT: term)
+    relation rqst_vote_nolog(S: node, T: term)
+    relation vote_cand(S: node, T: term, D: node)
+    relation append(T: term, IX: index, V: value, LOGT: term, PLOGT: term)
+    relation append_reply(S: node, T: term, IX: index)
+
+    action send_rqst_vote(src: node, t: term, ix: index, logt: term)
+    action send_rqst_vote_nolog(src: node, t:term)
+    action send_vote_cand(src:node, t:term, dst:node)
+    action send_append(src: node, t: term, ix: index, v: value, logt: term, plogt: term, isrecover: bool, recovernode: node)
+    action send_append_reply(src:node, leader:node, t:term, ix: index, isrecover: bool)
+
+    action send_keepalive(src:node, t:term)
+    action send_nack(src:node, leader:node, t:term, ix: index)
+
+    # Handlers
+    action handle_rqst_vote(dst:node, src: node, t: term, logt: term, ix: index)
+    action handle_rqst_vote_nolog(dst:node, src: node, t:term)
+    action handle_vote_cand(dst:node, t:term, src:node)
+    action handle_append(dst:node, src: node, t: term, ix: index, v: value, logt: term, plogt: term, isrecover: bool)
+    action handle_append_reply(dst:node, src: node, t:term, ix: index, isrecover: bool)
+
+    action handle_keepalive(self:node, t:term)
+    action handle_nack(self:node, n:node, t:term, ix: index)
+
+    specification {
+        after init  {
+            rqst_vote(S, T, IX, LOGT) := false;
+            rqst_vote_nolog(S, T) := false;
+            vote_cand(S, T, D) := false;
+            append(T, IX, V, LOGT, PLOGT) := false;
+            append_reply(S, T, IX) := false;
+        }
+
+        after send_rqst_vote {
+            rqst_vote(src, t, ix, logt) := true;
+        }
+
+        before handle_rqst_vote {
+            require rqst_vote(src, t, ix, logt);
+        }
+
+        after send_rqst_vote_nolog {
+            rqst_vote_nolog(src, t) := true;
+        }
+
+        before handle_rqst_vote_nolog {
+            require rqst_vote_nolog(src, t);
+        }
+
+        after send_vote_cand {
+            vote_cand(src, t, dst) := true;
+        }
+
+        before handle_vote_cand {
+            require vote_cand(src, t, dst)
+        }
+
+        after send_append {
+            append(t, ix, v, logt, plogt) := true;
+        }
+
+        before handle_append {
+            require append(t, ix, v, logt, plogt);
+        }
+
+        after send_append_reply {
+            append_reply(src, t, ix) := true;
+        }
+
+        before handle_append_reply {
+            require append_reply(src, t, ix);
+        }
+
+    }
+
+    implementation {
+
+        action send_debug(src:node, m:msg)
+        import send_debug
+
+        action recv_debug(dst:node, m:msg)
+        import recv_debug
+
+        implement send_rqst_vote {
+			var m : msg;
+            m_kind(m) := rqvote;
+            m_node(m) := src;
+            m_logt(m) := logt;
+            m_ix(m) := ix;
+            m_term(m) := t;
+            call broadcast(src, m);
+        }
+
+        implement send_rqst_vote_nolog {
+            var m : msg;
+            m_kind(m) := rqvotenolog;
+            m_node(m) := src;
+            m_term(m) := t;
+            call broadcast(src, m);
+        }
+
+        implement send_vote_cand {
+            var m : msg;
+            m_kind(m) := vtcandidate;
+            m_node(m) := src;
+            m_term(m) := t;
+            call net.send(src, dst, m);
+            call send_debug(src, m);
+        }
+
+        implement send_append {
+            var m: msg;
+            m_kind(m) := appendmsg;
+            m_term(m) := t;
+            m_val(m) := v;
+            m_logt(m) := logt;
+            m_node(m) := src;
+            m_ix(m) := ix;
+            m_prevlogt(m) := plogt;
+            m_isrecover(m) := isrecover;
+            if ~isrecover {
+                call broadcast(src, m);
+            } else {
+                call net.send(src, recovernode, m);
+                call send_debug(src, m);
+            };
+        }
+
+        implement send_append_reply {
+            var m : msg;
+            m_kind(m) := appendrep;
+            m_term(m) := t;
+            m_node(m) := src;
+            m_ix(m) := ix;
+            m_isrecover(m) := isrecover;
+            call net.send(src, leader, m);
+        }
+
+        implement send_keepalive {
+             var m : msg;
+             m_kind(m) := keepalive;
+             m_term(m) := t;
+             call broadcast(src, m);
+         }
+ 
+         implement send_nack {
+             var m : msg;
+             m_kind(m) := nack;
+             m_term(m) := t;
+             m_node(m) := src;
+             m_ix(m) := ix;
+             call net.send(src, leader, m);
+             call send_debug(src, m);
+         }
+
+        action broadcast(src:node, m:msg) = {
+            if m_kind(m) ~= keepalive {
+                call send_debug(src, m);
+            };
+            var iter := node.iter.create(0); # For reconfiguration: will like to change this to be iterator over set
+            while ~iter.is_end
+                invariant net.sent(M, N) -> old net.sent(M, N) | M = m
+            {
+                var dst := iter.val;
+                call net.send(src, dst, m);
+                iter := iter.next;
+            };
+        }
+
+        implement net.recv(dst:node, m:msg) {
+            if m_kind(m) ~= keepalive {
+                call recv_debug(dst, m);
+            };
+            if m.m_kind = rqvote {
+                call handle_rqst_vote(dst, m_node(m), m_term(m), m_logt(m), m_ix(m));
+            }
+            else if m.m_kind = rqvotenolog {
+                call handle_rqst_vote_nolog(dst, m_node(m), m_term(m));
+            }
+            else if m.m_kind = vtcandidate {
+                call handle_vote_cand(dst, m_term(m), m_node(m));
+            }
+            else if m.m_kind = appendmsg {
+                call handle_append(dst, m_node(m), m_term(m), m_ix(m), m_val(m), m_logt(m), m_prevlogt(m), m_isrecover(m));
+            }
+            else if m.m_kind = appendrep {
+                call handle_append_reply(dst, m_node(m), m_term(m), m_ix(m), m_isrecover(m));
+            }
+            else if m.m_kind = keepalive {
+                call handle_keepalive(dst, m_term(m))
+            }
+            else if m.m_kind = nack {
+                call handle_nack(dst, m_node(m), m_term(m), m_ix(m))
+            };
+        }
+
+        invariant net.sent(M, N) & m_kind(M) = rqvote -> rqst_vote(m_node(M), m_term(M), m_ix(M), m_logt(M))
+        invariant net.sent(M, N) & m_kind(M) = rqvotenolog -> rqst_vote_nolog(m_node(M), m_term(M))
+        invariant net.sent(M, N) & m_kind(M) = vtcandidate -> vote_cand(m_node(M), m_term(M), N)
+        invariant net.sent(M, N) & m_kind(M) = appendmsg -> append(m_term(M), m_ix(M), m_val(M), m_logt(M), m_prevlogt(M))
+        invariant net.sent(M, N) & m_kind(M) = appendrep -> append_reply(m_node(M), m_term(M), m_ix(M))
+    }
+ 
+} with node, net
+

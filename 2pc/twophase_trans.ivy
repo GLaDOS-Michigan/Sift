@@ -1,0 +1,150 @@
+#lang ivy1.7
+
+include udp
+include nodes
+
+object msg_kind = {
+    type this = {working, prepared, committed, aborted}
+}
+
+object msg = {
+    type this = struct {
+        m_kind : msg_kind,
+	    m_rm : node
+    }
+}
+
+instance net : udp_simple(node, msg)
+
+isolate trans = {
+
+    action send_working(n:node)
+    action send_prepared(n:node)
+    action send_committed(n:node)
+    action send_aborted(n:node)
+
+    action handle_working(dst:node, n:node) 
+    action handle_prepared(dst:node, n:node) 
+    action handle_committed(dst:node, n:node) 
+    action handle_aborted(dst:node, n:node) 
+
+    specification {
+        relation working(N:node)
+        relation prepared(N:node)
+        relation committed(N:node)
+        relation aborted(N:node)
+
+        after init {
+            working(N) := false;
+            prepared(N) := false;
+            committed(N) := false;
+            aborted(N) := false;
+        }
+
+        before send_working {
+            working(n) := true;
+        }
+
+        before send_prepared {
+            prepared(n) := true;
+        }
+
+        before send_committed {
+            committed(n) := true;
+        }
+
+        before send_aborted {
+            aborted(n) := true;
+        }
+
+        before handle_working {
+            assert working(n);
+        }
+
+        before handle_prepared {
+            assert prepared(n);
+        }
+
+        before handle_committed {
+            assert committed(n);
+        }
+
+        before handle_aborted {
+            assert aborted(n);
+        }
+
+    }
+
+    implementation {
+
+        action debug_bcasting(src:node, m:msg)
+        action debug_receiving(dst:node, m:msg)
+
+        action bcast(src: node, m: msg) = {
+            call debug_bcasting(src, m);
+            var iter := node.iter.create(0);
+            while ~iter.is_end
+            invariant net.spec.sent(M,D) & msg.m_kind(M) = msg_kind.working -> working(msg.m_rm(M))
+            invariant net.spec.sent(M,D) & msg.m_kind(M) = msg_kind.prepared -> prepared(msg.m_rm(M))
+            invariant net.spec.sent(M,D) & msg.m_kind(M) = msg_kind.committed -> committed(msg.m_rm(M))
+            invariant net.spec.sent(M,D) & msg.m_kind(M) = msg_kind.aborted -> aborted(msg.m_rm(M))
+            {
+                var n := iter.val;
+                call net.send(src,n,m);
+                iter := iter.next;
+            }
+        }
+        
+        implement send_working(n: node) {
+            var m: msg;
+            m.m_kind := msg_kind.working;
+            m.m_rm := n;
+            call bcast(n, m);
+        }
+
+        implement send_prepared(n: node) {
+            var m: msg;
+            m.m_kind := msg_kind.prepared;
+            m.m_rm := n;
+            call bcast(n, m);
+        }
+
+        implement send_committed(n: node) {
+            var m: msg;
+            m.m_kind := msg_kind.committed;
+            m.m_rm := n;
+            call bcast(n, m);
+        }
+
+        implement send_aborted(n: node) {
+            var m: msg;
+            m.m_kind := msg_kind.aborted;
+            m.m_rm := n;
+            call bcast(n, m);
+        }
+
+        implement net.recv(dst:node, m:msg) {
+            call debug_receiving(dst,m);
+            if m.m_kind = msg_kind.working {
+                call handle_working(dst, m.m_rm); 
+            }
+            else if m.m_kind = msg_kind.prepared {
+                call handle_prepared(dst, m.m_rm);
+            }
+            else if m.m_kind = msg_kind.committed {
+                call handle_committed(dst, m.m_rm);
+            }
+            else if m.m_kind = msg_kind.aborted {
+                call handle_aborted(dst, m.m_rm);
+            }
+        }
+
+        invariant net.spec.sent(M,D) & msg.m_kind(M) = msg_kind.working -> working(msg.m_rm(M))
+        invariant net.spec.sent(M,D) & msg.m_kind(M) = msg_kind.prepared -> prepared(msg.m_rm(M))
+        invariant net.spec.sent(M,D) & msg.m_kind(M) = msg_kind.committed -> committed(msg.m_rm(M))
+        invariant net.spec.sent(M,D) & msg.m_kind(M) = msg_kind.aborted -> aborted(msg.m_rm(M))
+    }
+} with net, node
+
+import trans.debug_receiving
+import trans.debug_bcasting

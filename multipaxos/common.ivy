@@ -1,0 +1,74 @@
+#lang ivy1.7
+
+include nodes
+
+# base types
+instance round : unbounded_sequence
+
+instance inst : unbounded_sequence # instances, i.e. positions in the log
+
+instance time : unbounded_sequence
+
+type value
+# no_ops to fill holes in the log
+individual no_op : value
+
+type vote_struct = struct {
+   maxr : round,
+   maxv : value
+}
+
+individual not_a_vote : vote_struct
+
+isolate not_a_vote_def = {
+    invariant not_a_vote.maxr = 0 & not_a_vote.maxv = no_op
+    after init{ 
+        not_a_vote.maxr := 0;
+        not_a_vote.maxv := no_op;
+    }
+}
+
+instance votemap : array(inst, vote_struct)
+
+individual empty_nset: nset
+
+isolate empty_nset_def = {
+    invariant ~nset.member(N, empty_nset)
+    after init {
+        empty_nset := nset.emptyset;
+    }
+} with nset
+
+type ballot_status = struct {
+    active : bool,
+    voters : nset,
+    proposal : value,
+    decided : bool
+}
+instance ballot_status_array : array(inst, ballot_status)
+
+individual init_status : ballot_status
+# default status for initialization
+isolate init_status_def = {
+    invariant ~init_status.decided & ~nset.member(N,init_status.voters) & ~init_status.active
+    after init {
+        init_status.active := false;
+        init_status.decided := false;
+        init_status.voters := empty_nset
+    }
+} with nset, empty_nset_def
+
+type decision_struct = struct {
+    decision: value,
+    present: bool
+}
+    
+instance log : array(inst, decision_struct)
+
+individual no_decision : decision_struct
+isolate no_decision_def = {
+    after init {
+        no_decision.present := false
+    }
+    invariant ~no_decision.present
+}

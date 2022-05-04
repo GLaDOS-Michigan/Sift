@@ -1,0 +1,58 @@
+#lang ivy1.7
+
+include nodes
+
+isolate spec = {
+
+	relation working(R:node)
+	relation prepared(R:node)
+	relation committed(R:node)
+	relation aborted(R:node)
+
+	after init {
+		working(R) := true;
+		working(0) := false;
+		prepared(R) := false;
+		committed(R) := false;
+		aborted(R) := false;
+	}
+
+	action prepare(rm:node) = {
+		if  working(rm) & rm ~= 0 {
+			working(rm) := false;
+			prepared(rm) := true;
+			committed(rm) := false;
+			aborted(rm) := false;
+		}
+	}
+
+	action decide_commit(rm:node) = {
+		if prepared(rm) & rm ~= 0 & forall R. R=0 | (prepared(R) | committed(R)) {
+			working(rm) := false;
+			prepared(rm) := false;
+			committed(rm) := true;
+			aborted(rm) := false;
+		}
+	}
+
+	action decide_abort(rm:node) = {
+		if rm ~= 0 & (working(rm) | prepared(rm)) & forall R. R=0 | ~committed(R) {
+			working(rm) := false;
+			prepared(rm) := false;
+			committed(rm) := false;
+			aborted(rm) := true;
+		}
+	}
+
+	#export prepare
+	#export decide_commit
+	#export decide_abort
+
+	invariant [safety] (forall R1, R2. ~(aborted(R1) & committed(R2)) )
+
+	invariant [ic3po_prop1]	(forall N2, N1 . (spec.aborted(N1) -> ~spec.committed(N2)))
+	invariant [ic3po_prop2]	(forall N0 . (spec.aborted(N0) -> ~spec.prepared(N0)))
+	invariant [ic3po_global3]	~spec.committed(0)
+	invariant [ic3po_global3_1]	~spec.aborted(0)
+
+} with node

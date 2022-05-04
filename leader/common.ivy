@@ -1,0 +1,22 @@
+#lang ivy1.7
+
+include order
+
+instance node : iterable
+#interpret node -> bv[1]
+
+#isolate id = {
+#    type this
+#    specification {
+#        instantiate totally_ordered(this)
+#    }
+
+#    implementation {
+#        interpret this -> bv[32]
+#    }
+#}
+
+instance id: unbounded_sequence
+
+parameter idn(N:node): id
+axiom [id_injective] idn(N1) = idn(N2) -> N1 = N2

@@ -1,0 +1,254 @@
+#lang ivy1.7
+
+# This file contains the specification and implementation of the network shim is by the Multi-Paxos implementation.
+# The network shim just routes the different packet types to their designated handler.
+
+include tcp
+include common
+include nodes
+include votemap_segment
+object msg_kind = {
+    type this = {one_a, one_b, two_a, two_b, keep_alive, missing_two_a, missing_decision, decide}
+}
+
+object msg = {
+    type this = struct {
+        m_kind : msg_kind,
+        m_round : round,
+        m_inst : inst,
+        m_node : node,
+        m_value : value,
+        m_votemap : votemap_seg
+    }
+}
+
+instance net : simple_tcp(node,msg)
+
+isolate trans = {
+    action send_one_a(src: node, r: round, i: inst)
+    action recv_one_a(dst: node, src: node, r: round, i: inst)
+    
+    action send_one_b(src: node, dst: node, r: round, votes: votemap_seg)
+    action recv_one_b(dst: node, src: node, r: round, votes: votemap_seg)
+
+    action send_two_a(src: node, r: round, i: inst, v: value)
+    action recv_two_a(dst: node, src: node, r: round, i: inst, v: value)
+
+    action send_two_b(src: node, dst: node, r: round, i: inst, v: value)
+    action recv_two_b(dst: node, src: node, r: round, i: inst, v: value)
+
+    action send_decision(src: node, i: inst, v: value)
+    action recv_decision(dst: node, i: inst, v: value)
+
+    action send_keep_alive(src: node, r: round)
+    action recv_keep_alive(dst: node, src: node, r: round)
+
+#    instance missing_two_a_handler : handler(msg_kind.missing_two_a)
+#    instance missing_decision_handler : handler(msg_kind.missing_decision)
+    
+
+    specification {
+        relation one_a(S: node, R: round, I: inst)
+        relation one_b(S: node, D: node, R: round, V: votemap_seg)
+        relation two_a(R: round, I: inst, V: value)
+        relation two_b(S: node, R: round, I: inst, V: value)
+        relation decision(I: inst, V: value)
+
+        relation keep_alive(S: node, R: round)
+
+        after init {
+            one_a(S, R, I) := false;
+            one_b(S, D, R, V) := false;
+            two_a(R, I, V) := false;
+            two_b(S, R, I, V) := false;
+            decision(I, V) := false;
+
+            keep_alive(S, R) := false;
+        }
+
+        before send_one_a {
+            one_a(src, r, i) := true;
+        }
+
+        before recv_one_a {
+            assert one_a(src, r, i);
+        }
+
+        before send_one_b {
+            one_b(src, dst, r, votes) := true;
+        }
+
+        before recv_one_b {
+            assert one_b(src, dst, r, votes);
+        }
+
+        before send_two_a {
+            two_a(r, i, v) := true;
+        }
+
+        before recv_two_a {
+            assert two_a(r, i, v);
+        }
+
+        before send_two_b {
+            two_b(src, r, i, v) := true;
+        }
+
+        before recv_two_b {
+            assert two_b(src, r, i, v);
+        }
+
+        before send_decision {
+            decision(i, v) := true;
+        }
+
+        before recv_decision {
+            assert decision(i, v);
+        }
+
+        before send_keep_alive {
+            keep_alive(src, r) := true;
+        }
+
+        before recv_keep_alive {
+            assert keep_alive(src, r);
+        }
+    }
+
+    implementation {
+
+        # Do not change, key-value store shim depends on those:
+        action debug_sending(src:node,dst:node,m:msg)
+        action debug_receiving(dst:node,m:msg)
+
+        implement send_one_a(src: node, r: round, i: inst) {
+            var m: msg;
+            m.m_kind := msg_kind.one_a;
+            m.m_round := r;
+            m.m_node := src;
+            m.m_inst := i;
+
+            call bcast(src, m);
+        }
+
+        implement send_one_b(src: node, dst: node, r: round, votes: votemap_seg) {
+            var m: msg;
+            m.m_kind := msg_kind.one_b;
+            m.m_round := r;
+            m.m_node := src;
+            m.m_votemap := votes;
+
+            call unicast(src, dst, m);
+        }
+ 
+        implement send_two_a(src: node, r: round, i: inst, v: value) {
+            var m: msg;
+            m.m_kind := msg_kind.two_a;
+            m.m_round := r;
+            m.m_node := src;
+            m.m_inst := i;
+            m.m_value := v;
+
+            call bcast(src, m);
+        }
+
+        implement send_two_b(src: node, dst: node, r: round, i: inst, v: value) {
+            var m: msg;
+            m.m_kind := msg_kind.two_b;
+            m.m_node := src;
+            m.m_round := r;
+            m.m_inst := i;
+            m.m_value := v;
+
+            call unicast(src, dst, m);
+        }
+
+        implement send_decision(src: node, i: inst, v: value) {
+            var m: msg;
+            m.m_kind := msg_kind.decide;
+            m.m_inst := i;
+            m.m_value := v;
+            m.m_node := src;
+
+            call bcast(src, m);
+        }
+        
+        implement send_keep_alive(src: node, r: round) {
+            var m: msg;
+            m.m_kind := msg_kind.keep_alive;
+            m.m_node := src;
+            m.m_round := r;
+
+            call bcast(src, m);
+        }
+
+        implement net.recv(dst:node, m:msg) {
+            if (m.m_kind ~= msg_kind.keep_alive) { # keep-alive message obfuscate the debug output; uncomment if needed
+                call debug_receiving(dst,m);
+            };
+
+            if m.m_kind = msg_kind.one_a {
+                call recv_one_a(dst, m.m_node, m.m_round, m.m_inst);
+            }
+            else if m.m_kind = msg_kind.one_b {
+                call recv_one_b(dst, m.m_node, m.m_round, m.m_votemap);
+            }
+            else if m.m_kind = msg_kind.two_a {
+                call recv_two_a(dst, m.m_node, m.m_round, m.m_inst, m.m_value);
+            }
+            else if m.m_kind = msg_kind.two_b {
+                call recv_two_b(dst, m.m_node, m.m_round, m.m_inst, m.m_value);
+            }
+            else if m.m_kind = msg_kind.decide {
+                call recv_decision(dst, m.m_inst, m.m_value);
+            }
+            else if m.m_kind = msg_kind.keep_alive {
+                call recv_keep_alive(dst, m.m_node, m.m_round);
+            }
+#            else if m.m_kind = msg_kind.missing_two_a {
+#                call missing_two_a_handler.handle(dst,m)
+#            }
+#            else if m.m_kind = msg_kind.missing_decision {
+#                call missing_decision_handler.handle(dst,m)
+#            }
+        }
+
+        action bcast(src:node,m:msg) = { # broadcast sends to all nodes, including the sender.
+            var iter := node.iter.create(0);
+            while ~iter.is_end
+                invariant net.sent(M, D) & msg.m_kind(M) = msg_kind.one_a -> one_a(msg.m_node(M), msg.m_round(M), msg.m_inst(M))
+                invariant net.sent(M, D) & msg.m_kind(M) = msg_kind.one_b -> one_b(msg.m_node(M), D, msg.m_round(M), msg.m_votemap(M))
+                invariant net.sent(M, D) & msg.m_kind(M) = msg_kind.two_a -> two_a(msg.m_round(M), msg.m_inst(M), msg.m_value(M))
+                invariant net.sent(M, D) & msg.m_kind(M) = msg_kind.two_b -> two_b(msg.m_node(M), msg.m_round(M), msg.m_inst(M), msg.m_value(M))
+                invariant net.sent(M, D) & msg.m_kind(M) = msg_kind.decide -> decision(msg.m_inst(M), msg.m_value(M))
+                invariant net.sent(M, D) & msg.m_kind(M) = msg_kind.keep_alive -> keep_alive(msg.m_node(M), msg.m_round(M))
+            {
+                var n := iter.val;
+                if m.m_kind ~= msg_kind.keep_alive {
+                    call debug_sending(src,n,m);
+                };
+                call net.send(src,n,m);
+                iter := iter.next;
+            }
+        }
+
+        action unicast(src:node,dst:node,m:msg) = {
+            call debug_sending(src,dst,m);
+            call net.send(src,dst,m);
+        }
+
+        private {
+            invariant net.sent(M, D) & msg.m_kind(M) = msg_kind.one_a -> one_a(msg.m_node(M), msg.m_round(M), msg.m_inst(M))
+            invariant net.sent(M, D) & msg.m_kind(M) = msg_kind.one_b -> one_b(msg.m_node(M), D, msg.m_round(M), msg.m_votemap(M))
+            invariant net.sent(M, D) & msg.m_kind(M) = msg_kind.two_a -> two_a(msg.m_round(M), msg.m_inst(M), msg.m_value(M))
+            invariant net.sent(M, D) & msg.m_kind(M) = msg_kind.two_b -> two_b(msg.m_node(M), msg.m_round(M), msg.m_inst(M), msg.m_value(M))
+            invariant net.sent(M, D) & msg.m_kind(M) = msg_kind.decide -> decision(msg.m_inst(M), msg.m_value(M))
+            invariant net.sent(M, D) & msg.m_kind(M) = msg_kind.keep_alive -> keep_alive(msg.m_node(M), msg.m_round(M))
+        }
+    }
+} with net, node
+
+# Do not change, key-value store links to those:
+import trans.debug_sending
+import trans.debug_receiving
+

@@ -1,0 +1,21 @@
+#lang ivy1.7
+
+include common
+
+isolate spec = {
+    relation lock_history(E: epoch, N: node)
+
+    after init {
+        lock_history(E, N) := E = 0 & N = 0;
+    }
+
+    action next(e: epoch, n: node) = {
+        if forall E, N. lock_history(E, N) -> E < e {
+            lock_history(e, n) := true;
+        }
+    }
+
+#    private {
+#        invariant lock_history(E, N1) & lock_history(E, N2) -> N1 = N2
+#    }
+} with node, epoch

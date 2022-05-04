@@ -1,0 +1,246 @@
+#lang ivy1.7
+
+include raft_spec
+
+include nodes
+
+isolate protocol0 = {
+    relation rqst_vote(S: node, T: term, I: index, LOGT: term)
+    relation rqst_vote_nolog(S: node, T: term)
+    relation vote_cand(S: node, T: term, D: node)
+    relation append(T: term, IX: index, V: value, LOGT: term, PLOGT: term)
+    relation append_reply(S: node, T: term, IX: index)
+    relation committed(IX: index, V: value)
+    
+    relation current_term(N: node, T: term)
+    relation left_term(N: node, T: term)
+    relation leader(N: node)
+
+    relation log_filled(N: node, IX: index)
+    relation log_term(N: node, IX: index, T: term)
+    function log_val(N: node, IX: index): value
+
+    relation started(T: term)
+    function term_leader(T: term): node
+    relation term_filled(T: term, IX: index)
+    relation term_logt(T: term, IX: index, T: term)
+    function term_val(T: term, IX: index): value
+
+    individual commit_ix: index
+    individual commit_term: term
+    individual commit_quorum: nset
+
+    after init {
+        rqst_vote(S, T, I, LOGT) := false;
+        rqst_vote_nolog(S, T) := false;
+        vote_cand(S, T, D) := false;
+        append(T, IX, V, LOGT, PLOGT) := false;
+        append_reply(S, T, IX) := false;
+        committed(IX, V) := false;
+
+        current_term(N, T) := T = 0;
+        left_term(N, T) := false;
+        leader(N) := false;
+
+        log_filled(N, IX) := false;
+        log_term(N, IX, T) := false;
+
+        started(T) := false;
+        term_filled(T, IX) := false;
+        term_logt(T, IX, T) := false;
+
+        commit_ix := 0;
+        commit_term := 0;
+    }
+
+    action move_to_term(n: node, t: term) = {
+        if ~current_term(n, t) & ~left_term(n, t) {
+            current_term(n, T) := T = t;
+            left_term(n, T) := T < t;
+            leader(n) := false;
+        };
+    }
+
+    action announce_candidacy(n: node, t: term, logix: index, logt: term) = {
+        require ~current_term(n, t) & ~left_term(n, t);
+        require IX > logix -> ~log_filled(n, IX);
+        require log_filled(n, logix);
+        require log_term(n, logix, logt);
+
+        call move_to_term(n, t);
+
+        rqst_vote(n, t, logix, logt) := true;
+        vote_cand(n, t, n) := true;
+    }
+
+    action announce_candidacy_nolog(n: node, t: term) = {
+        require ~current_term(n, t) & ~left_term(n, t);
+        require ~log_filled(n, IX);
+
+        call move_to_term(n, t);
+        rqst_vote_nolog(n, t) := true;
+        vote_cand(n, t, n) := true;
+    }
+
+    action recv_rqst_vote(n: node, s: node, t: term, ix: index, logt: term) = {
+        require rqst_vote(s, t, ix, logt);
+        require ~current_term(n, t) & ~left_term(n, t);
+        require forall T, IX. T > logt -> ~log_term(n, IX, T);
+        require forall IX, IX2. log_term(n, IX, logt) & IX2 > ix -> ~log_filled(n, IX2);
+
+        call move_to_term(n, t);
+        vote_cand(n, t, s) := true;
+    }
+
+    action recv_rqst_vote_nolog(n: node, s: node, t: term) = {
+        require rqst_vote_nolog(s, t);
+        require ~current_term(n, t) & ~left_term(n, t);
+        require ~log_filled(n, IX);
+        
+        call move_to_term(n, t);
+        vote_cand(n, t, s) := true;
+    }
+
+    action recv_votes(n: node, t: term, q: nset) = {
+#    before recv_vote(n: node, t: term, q: nset) {
+        require current_term(n, t);
+        require ~leader(n);
+        require q.majority;
+        require forall N. nset.member(N, q) -> vote_cand(N, t, n);
+
+        leader(n) := true;
+
+        started(t) := true;
+        term_leader(t) := n;
+        term_filled(t, IX) := log_filled(n, IX);
+        term_logt(t, IX, T) := log_term(n, IX, T);
+        term_val(t, IX) := log_val(n, IX);
+    }
+
+    action append_new_entry(n: node, v: value, t: term, ix: index) = {
+
+#    before append_new_entry(n: node, v: value, t: term, ix: index) {
+        require leader(n);
+        require current_term(n, t);
+        require log_filled(n, IX) <-> IX < ix;
+
+        log_filled(n, ix) := true;
+        log_term(n, ix, T) := t = T;
+        log_val(n, ix) := v;
+
+        term_filled(t, IX) := log_filled(n, IX);
+        term_logt(t, IX, T) := log_term(n, IX, T);
+        term_val(t, IX) := log_val(n, IX);
+    }
+
+    action replicate_entry(n: node, t: term, ix: index, logt: term, preix: index, pret: term) = {
+        require leader(n);
+        require current_term(n, t);
+        require log_filled(n, ix);
+        require log_term(n, ix, logt);
+        require ix > 0 -> index.succ(preix, ix);
+        require ix > 0 -> log_term(n, preix, pret);
+        require ix = 0 -> pret = 0;
+
+        append(t, ix, log_val(n, ix), logt, pret) := true;
+        append_reply(n, t, ix) := true;
+    }
+
+    action recv_append(n: node, t: term, ix: index, logv: value, logt: term, preix: index, pret: term) = {
+        require append(t, ix, logv, logt, pret);
+        require current_term(n, t);
+
+        require ix > 0 -> index.succ(preix, ix);
+        require ix > 0 -> log_term(n, preix, pret);
+        require ~log_term(n, ix, logt);
+
+        log_filled(n, IX) := IX <= ix;
+        log_term(n, IX, T) := (IX < ix & log_term(n, IX, T)) | (IX = ix & T = logt);
+        log_val(n, ix) := logv;
+
+        append_reply(n, t, ix) := true;
+    }
+
+    action recv_append_reply(n: node, t: term, ix: index, q: nset) = {
+        require q.majority;
+        require forall N. nset.member(N, q) -> append_reply(N, t, ix);
+
+        require leader(n);
+        require current_term(n, t);
+        require log_term(n, ix, t);
+
+        if forall V. ~committed(ix, V) {
+            commit_ix := ix;
+            commit_term := t;
+            commit_quorum := q;
+        };
+
+        committed(IX, V) := committed(IX, V) | (IX <= ix & V = log_val(n, IX));
+        call spec.commit(n, ix);
+    }
+
+    private {
+
+    invariant [safety] committed(IX, V) <-> spec.learned(IX, V)
+
+    invariant current_term(N, T) -> (T2 < T <-> left_term(N, T2))
+    invariant left_term(N, T) & T2 < T -> left_term(N, T2)
+
+    invariant current_term(N, T) & leader(N) -> term_leader(T) = N & started(T)
+    invariant current_term(N, T) & term_leader(T) = N & started(T) -> leader(N)
+    invariant started(T) -> current_term(term_leader(T), T) | left_term(term_leader(T), T)
+    invariant ~(rqst_vote_nolog(N, T) & rqst_vote(N, T, IX, LOGT))
+    invariant (rqst_vote_nolog(N, T) | rqst_vote(N, T, IX, LOGT)) -> current_term(N, T) | left_term(N, T)
+    invariant rqst_vote(N, T, IX, LOGT) & ~left_term(N, T) & ~started(T) -> log_term(N, IX, LOGT)
+    invariant term_filled(T, IX) -> started(T)
+
+
+    invariant vote_cand(N, T, C1) & vote_cand(N, T, C2) -> C1 = C2
+    invariant vote_cand(N, T, C)  -> current_term(N, T) | left_term(N, T)
+    invariant vote_cand(N, T, C)  -> current_term(C, T) | left_term(C, T)
+
+    invariant log_term(N, IX, T1) & log_term(N, IX, T2) -> T1 = T2
+    invariant log_term(N, IX1, T1) & log_term(N, IX2, T2) & IX1 < IX2 -> T1 <= T2
+    invariant log_term(N, IX, T1) -> log_filled(N, IX)
+    invariant log_term(N, IX, T) -> current_term(N, T) | left_term(N, T)
+    invariant log_filled(N, IX1) & IX2 < IX1 -> log_filled(N, IX2)
+
+    invariant log_term(N, IX, T) & IX2 <= IX -> (log_filled(N, IX2) <-> term_filled(T, IX2))
+    invariant log_term(N, IX, T) & IX2 <= IX -> (log_term(N, IX2, T2) <-> term_logt(T, IX2, T2))
+    invariant log_term(N, IX, T) & IX2 <= IX -> (log_val(N, IX2) = term_val(T, IX2))
+
+    invariant term_logt(T, IX, T1) & term_logt(T, IX, T2) -> T1 = T2
+    invariant term_logt(T, IX1, T1) & term_logt(T, IX2, T2) & IX1 < IX2 -> T1 <= T2
+    invariant term_logt(T, IX, T1) -> term_filled(T, IX)
+    invariant term_logt(T, IX, T1) -> T1 <= T
+
+    invariant term_logt(T1, IX, T) & IX2 <= IX -> (term_filled(T1, IX2) <-> term_filled(T, IX2))
+    invariant term_logt(T1, IX, T) & IX2 <= IX -> (term_logt(T1, IX2, T2) <-> term_logt(T, IX2, T2))
+    invariant term_logt(T1, IX, T) & IX2 <= IX -> (term_val(T1, IX2) = term_val(T, IX2))
+
+    invariant term_logt(T, IX, T) & (exists Q. nset.majority(Q) & forall N. nset.member(N, Q) -> (append_reply(N, T, IX) | ~left_term(N, T))) & T2 > T & started(T2) -> term_logt(T2, IX, T)
+    invariant term_logt(T, IX, T) & (exists Q. nset.majority(Q) & forall N. nset.member(N, Q) -> (append_reply(N, T, IX) | ~left_term(N, T))) & append_reply(NN, T, IX) ->  log_term(NN, IX, T)
+    invariant term_logt(T, IX, T) & (exists Q. nset.majority(Q) & forall N. nset.member(N, Q) -> (append_reply(N, T, IX) | ~left_term(N, T))) & append_reply(NN, T, IX) & T2 > T & vote_cand(NN, T2, C) & ~left_term(C, T2) & ~started(T2) -> log_term(C, IX, T)
+
+    invariant started(T)-> exists Q. (nset.majority(Q) & forall NN. nset.member(NN, Q) -> vote_cand(NN, T, term_leader(T)))
+
+    invariant append(T, IX, V, LOGT, PRET) -> started(T)
+    invariant append(T, IX, V, LOGT, PRET) -> term_filled(T, IX) & term_logt(T, IX, LOGT) & term_val(T, IX) = V
+    invariant append(T, IX, V, LOGT, PRET) & index.succ(PIX, IX) -> term_logt(T, PIX, PRET)
+
+    invariant append_reply(N, T, IX) -> term_filled(T, IX)
+    invariant append_reply(N, T, IX) & T2 < T -> left_term(N, T2)
+
+    invariant current_term(N, T) & leader(N) -> (log_filled(N, IX) <-> term_filled(T, IX))
+    invariant current_term(N, T) & leader(N) -> (log_term(N, IX, TT) <-> term_logt(T, IX, TT))
+    invariant current_term(N, T) & leader(N) -> (log_val(N, IX) = term_val(T, IX))
+
+    invariant IX > commit_ix -> ~committed(IX, V)
+    invariant commit_ix > 0 & IX <= commit_ix -> committed(IX, term_val(commit_term, IX))
+    invariant committed(IX, V) & nset.member(N, commit_quorum) -> append_reply(N, commit_term, commit_ix)
+    invariant committed(IX, V) -> commit_quorum.majority
+    invariant committed(IX, V) -> term_logt(commit_term, commit_ix, commit_term)
+    invariant committed(IX, V) -> term_filled(commit_term, IX)
+    invariant committed(IX, V) -> term_val(commit_term, IX) = V
+    }
+} with spec, nset, nset.majorities_intersect, index, term

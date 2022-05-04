@@ -1,0 +1,62 @@
+#lang ivy1.7
+
+# This is like unbounded sequence, but we know for sure that 0 <= X for all elements
+module natural_numbers = {
+    type this
+    alias t = this
+
+    # returns the least key greater than x
+    action next(x:t) returns (y:t)
+
+    # returns the greatest key less than x
+    action prev(x:t) returns (y:t)
+
+    action add(x:t, y:t) returns (z:t)
+
+    relation succ(X:t,Y:t)
+
+    object spec = {
+
+    property succ(X,Z) -> (X < Z & ~(X < Y & Y < Z))
+    property 0 <= X:t
+#    property succ(0,1)
+    instantiate totally_ordered(t)
+
+    after next {
+        assert x < y & (x < Y -> y <= Y);
+        assert succ(x,y)
+    }
+    before prev {
+        assert 0 < x
+    }
+    after prev {
+        assert y < x & (Y < x -> Y <= y);
+        assert succ(y,x)
+    }
+    after add {
+        assert y > 0 -> z > x;
+        assert y = 0 -> z = x;
+        assert x > 0 -> z > y;
+        assert x = 0 -> z = y;
+    }
+    }
+
+    object impl = {
+
+    interpret t -> int
+
+    definition succ(X,Y) = (Y = X + 1)
+
+    implement next {
+        y := x + 1
+    }
+    implement prev {
+        y := x - 1
+    }
+    implement add {
+        z := x + y
+    }
+    }
+
+    trusted isolate iso = impl,spec
+}

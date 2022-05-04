@@ -1,0 +1,64 @@
+#lang ivy1.7
+
+
+include collections
+
+################################################################################
+#
+# Specification of delegation map
+#
+
+module delegation_map(key, id) = {
+
+    # set the value of all keys in the range [lo,hi] to id
+    action set(k: key, dst: id)
+
+    # get the value of key k
+    action get(k:key) returns (val:id)
+
+    # The delegation map is a relation, since as a function it might
+    # not be stratified.
+
+    specification {
+        relation map(K:key, X:id)
+
+        after init {
+            map(K, X) := X = 0
+        }
+
+        before set {
+            map(K, X) := ((X = dst) & K = k)
+                       | (map(K, X) & K ~= k);
+        }
+        after get {
+            assert map(k, val);
+        }
+
+        invariant map(K, V) & map(K, W) -> V = W
+    }
+
+    # The implementation uses an ordered map.  Each key in the
+    # the ordered map represents the lower bound of an interval of
+    # keys with the same value. The map gives the values for the lower bounds.
+
+    implementation {
+        function imap(K: key) : id
+
+        after init {
+            imap(K) := 0;
+        }
+
+        implement set(k:key, dst:id) {
+            imap(k) := dst;
+        }
+
+        implement get(k:key) returns (val:id)  {
+            val := imap(k);
+        }
+
+# The value of every key between K and its successor is the same as K's value.
+
+        invariant map(K, imap(K))
+    }
+    isolate iso = this with key
+}

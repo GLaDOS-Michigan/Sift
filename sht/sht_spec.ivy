@@ -1,0 +1,40 @@
+#lang ivy1.7
+
+
+################################################################################
+#
+# Reference specification
+#
+# This is a monitor for linearizability of a concurrent map.
+#
+################################################################################
+
+include common 
+
+isolate spec = {
+
+    relation requests(R: req)
+    relation replies(R: req)
+    individual map(K:key) : value
+    
+    after init {
+        requests(R) := false;
+        replies(R) := false;
+        map(K) := 0;
+    }
+
+    action commit(r1: req, r2: req) = {
+        require r2.rtype = r1.rtype;
+        require r2.src = r1.src;
+        require r2.rkey = r1.rkey;
+        if r2.rdata = r1.rdata if r1.rtype = write else map(r1.rkey) {
+        if ~requests(r1) {
+        if r1.rtype = write {
+            map(r1.rkey) := r1.rdata;
+        };
+        requests(r1) := true;
+        replies(r2) := true;
+        }
+        }
+    }
+}

@@ -1,0 +1,119 @@
+#lang ivy1.7
+
+include twophase_trans
+include tcommit
+
+isolate system = {
+
+    axiom true # needed because of a bug in ivy_to_vmt
+
+    object rm_state = {
+        type this = {ini, working, prepared, committed, aborted}
+    }
+
+    individual emptynset: nset
+
+    after init {
+        emptynset := nset.emptyset;
+    }
+
+    object server(self:node) = {
+
+        individual state: rm_state
+
+        relation is_tm
+        individual tm_prepset: nset
+        individual tm_allset: nset
+
+        after init {
+            state := rm_state.ini if self = 0 else rm_state.working;
+            is_tm := true if self = 0 else false;
+            tm_allset := emptynset;
+            tm_prepset := emptynset;
+        }
+
+        action prepare = {
+            if ~is_tm & state = rm_state.working {
+
+                call trans.send_working(self); # so that the tm knows who is part of the decision process. used when tm commits
+
+                state := rm_state.prepared;
+                call trans.send_prepared(self);
+                #call protocol.rMPrepare(self);  
+                call spec.prepare(self);
+            } 
+        }
+
+        action commit = {
+            # & forall R. protocol.tm_prepared(R)
+            # & forall N. N = 0 | nset.member(N, tm_prepset)
+            # & nset.allset(tm_prepset.add(0))
+            if is_tm & state = rm_state.ini & nset.allset(tm_prepset.add(0)) { 
+                state := rm_state.committed;
+                call trans.send_committed(self);
+                #call protocol.tMCommit
+            }
+        }
+
+        action abort = {
+            if is_tm & state = rm_state.ini { 
+                state := rm_state.aborted;
+                call trans.send_aborted(self);
+                #call protocol.tMAbort
+            } else if ~is_tm & state = rm_state.working {
+                state := rm_state.aborted;
+                call trans.send_aborted(self);
+                call spec.decide_abort(self);
+            }
+        }
+
+        implement trans.handle_working(n:node) { # keep track of all RMs that are part of the decision process. need a prepare message from all for tm to commit
+            if is_tm & n ~= 0 {
+                tm_allset := tm_allset.add(n);
+            }
+        }
+
+        implement trans.handle_prepared(n:node) {
+            if is_tm & n ~= 0 & state = rm_state.ini {
+                if ~nset.member(n, tm_allset) {
+                    tm_allset := tm_allset.add(n);
+                };
+                tm_prepset := tm_prepset.add(n);
+                #call protocol.tMRcvPrepared(n);
+            }
+            
+        }
+
+        implement trans.handle_committed(n:node) {
+            if ~is_tm & n = 0 {
+                state := rm_state.committed;
+                call spec.decide_commit(self);
+            }
+        }
+
+        implement trans.handle_aborted(n:node) {
+            if ~is_tm & n = 0 {
+                state := rm_state.aborted;
+                call spec.decide_abort(self);
+            }
+        }
+
+    }
+
+    invariant [refinement1] N ~= 0 & trans.committed(N) -> spec.committed(N)
+    invariant [refinement3] N ~= 0 & trans.aborted(N) -> spec.aborted(N)
+
+    invariant [ic3po_global10]	(forall N0 . (spec.committed(N0) -> ~(system.server.state(N0) = system.rm_state.working)))
+    invariant [ic3po_global5_4]	(forall N0 . (trans.aborted(N0) -> ~(system.server.state(N0) = system.rm_state.working)))
+    invariant [ic3po_global8]	(forall N0 . (spec.aborted(N0) | system.server.is_tm(N0) | spec.working(N0) | spec.committed(N0) | spec.prepared(N0)))
+    invariant [ic3po_global1]	(forall N1 . (system.server.is_tm(N1) -> (0 = N1)))
+    invariant [ic3po_global12]	(forall N0 . (spec.prepared(N0) -> ~(system.server.state(N0) = system.rm_state.working)))
+    invariant [ic3po_global10_1]	(forall N2, N0 . (spec.committed(N2) -> ((N0 = N2) | (N0 = 0) | (0 = N2) | spec.committed(N0) | spec.prepared(N0))))
+
+} with spec, nset, trans
+
+export system.server.prepare
+export system.server.commit
+export system.server.abort
+
+extract iso_impl(self:node) = nset, node, system, system.server(self), trans(self), net(self)

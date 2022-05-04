@@ -1,0 +1,45 @@
+#lang ivy1.7
+
+include order
+include seqnum
+
+type key
+type node
+
+type value
+object impl_defs = {
+    implementation {
+        interpret value -> bv[10]
+        interpret node -> bv[10]
+        interpret key -> bv[10]
+    }
+}
+
+type otype = {read, write}
+
+instance seqnum : sequence_numbers
+instance reqnum : unbounded_sequence
+
+object req = {
+    type this = struct {
+        src : node,
+        rid : reqnum,
+        rkey : key,
+        rtype : otype,
+        rdata : value
+    }
+}
+
+object msg_kind = {
+    type this = {request_t, reply_t, delegate_t, ack_t}
+}
+
+object msg = {
+    type this = struct {
+        m_kind : msg_kind,
+        src : node,
+        rq : req,
+        num : seqnum
+    }
+}
+

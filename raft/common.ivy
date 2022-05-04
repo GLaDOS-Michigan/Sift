@@ -1,0 +1,37 @@
+#lang ivy1.7
+
+include nodes
+include order
+include natural_numbers
+
+type value
+interpret value -> strlit
+
+instance index : natural_numbers
+instance term : natural_numbers
+instance time: unbounded_sequence
+
+type log_entry = struct {
+    logt: term,
+    logv: value
+}
+
+instance logs: array(index, log_entry)
+
+instance replierslog: array(index, nset)
+
+trusted isolate typeconvert = {
+    action from_nodeid_to_term(n: node) returns (t: term)
+    object spec = {
+        after from_nodeid_to_term {
+            assert n >= 0 -> t >= 0
+        }
+    }
+    object impl = {
+        implement from_nodeid_to_term {
+            <<<
+                `t` = `n`;
+            >>>
+        }
+    }
+}

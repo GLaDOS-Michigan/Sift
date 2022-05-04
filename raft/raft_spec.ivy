@@ -1,0 +1,23 @@
+#lang ivy1.7
+
+include common
+
+isolate spec = {
+    relation learned(I: index, V: value)
+ 
+    after init {
+        learned(I, V) := false;
+    }
+
+    action commit(n: node, ix: index) = {
+        if forall IX, V. IX <= ix & learned(IX, V) -> V = protocol0.log_val(n, IX) {
+            learned(I, V) := learned(I, V) | (I <= ix & V = protocol0.log_val(n, I));
+        }
+    }
+
+    specification {
+        # safety property:
+        invariant learned(I, V1) & learned(I, V2) -> V1 = V2
+    }
+
+} with protocol0, index

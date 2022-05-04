@@ -1,0 +1,33 @@
+#lang ivy1.7
+
+include common
+
+isolate ring = {
+    relation btw(X: node, Y: node, Z: node)
+
+    action next(x: node) returns (y: node)
+
+    specification {
+        property [transitive] btw(W, X, Y) & btw(W, Y, Z) -> btw(W, X, Z)
+        property [acyclic] btw(W, X, Y) -> ~ btw(W, Y, X)
+        property [total] btw(W, X, Y) | btw(W, Y, X) | W = X | W = Y | X = Y
+        property [permutation] btw(X, Y, Z) -> btw(Y, Z, X)
+
+        after next {
+            assert 0 ~= node.max -> x ~= y;
+            assert (Z ~= x & Z ~= y) -> btw(x, y, Z);
+        }
+    }
+
+    implementation {
+        definition btw(X, Y, Z) = (X < Y & Y < Z) | (Y < Z & Z < X) | (Z < X & X < Y)
+
+        implement next(x: node) returns (y: node) {
+            if node.is_max(x) {
+                y := 0;
+            } else {
+                y := x.next;
+            }
+        }
+    }
+} with node

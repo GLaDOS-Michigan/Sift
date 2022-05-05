@@ -450,10 +450,6 @@ isolate system = {
     invariant trans.one_b(S, D, R, V) -> trans.one_a(D, R, votemap_seg(V).first)
     invariant trans.one_a(N, R, I) & server(N).current_round = R -> server(N).joined_votes.first = I
 
-    invariant [ic3po_global2_25]    (forall R1, N1, I1 . (protocol3.one_a(N1, R1, I1) -> leader_of(N1, R1)))
-    invariant [ic3po_other9]        (forall V1, I1, V2, N1 . ((trans.two_a(system.server.current_round(N1), I1, V1) & leader_of(N1, system.server.current_round(N1))) -> (system.server.round_active(N1) | (maxr(V2) = system.server.current_round(N1)))))
-    invariant [ic3po_global6_4]     (forall I1, N1, R1 . ((system.server.current_round(N1) < R1) -> ~protocol3.one_a(N1, R1, I1)))
-    invariant [ic3po_other15]       (forall I1, R1, V1, N1 . ((leader_of(N1, R1) & trans.two_a(R1, I1, V1)) -> ((system.server.current_round(N1) = R1) | (R1 < system.server.current_round(N1)))))
 } with nset, votemap, ballot_status_array, log, protocol3, round_leader, round, trans, inst, time, votemap_seg, votemap_seg_ops, not_a_vote_def, init_status_def, no_decision_def, empty_nset_def
 
 export system.server.propose

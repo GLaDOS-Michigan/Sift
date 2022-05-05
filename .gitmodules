@@ -1,0 +1,3 @@
+[submodule "ic3po"]
+	path = ic3po
+	url = https://github.com/aman-goel/ic3po.git

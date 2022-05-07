@@ -117,13 +117,6 @@ isolate system = {
 # enable trans.send_reply from system.set, system.get
     invariant trans.replied(R, D) -> req.src(R) = D & req.rid(R) < server(req.src(R)).req_no
 
-    invariant [ic3po_other1]        (forall N1, V1, K1 . (trans.delegated(K1, V1, N1) -> (spec.map(K1) = V1)))
-    invariant [ic3po_global4]       (forall R1, N1 . (trans.requested(R1, N1) -> ((req.rtype(R1) = write) | (req.rtype(R1) = read) | (write = read))))
-    invariant [ic3po_other3]        (forall N1, R1 . (spec.requests(R1) -> ~trans.requested(R1, N1)))
-    invariant [ic3po_other2]        (forall N1, K1 . (system.server.dm.map(N1, K1, N1) -> (spec.map(K1) = system.server.hash(N1, K1))))
-    invariant [ic3po_global2]       (forall N1, V1, N2, K1 . ((trans.delegated(K1, V1, N1) & trans.delegated(K1, V1, N2)) -> (N1 = N2)))
-    invariant [ic3po_global11]      (forall R1 . (spec.requests(R1) -> (req.rid(R1) < system.server.req_no(req.src(R1)))))
-    invariant [ic3po_global3]       (forall N2, N3, K1, N1 . ((system.server.dm.map(N3, K1, N3) & system.server.dm.map(N1, K1, N1)) -> (system.server.dm.map(N2, K1, N3) | (N1 = N3))))
 } with spec, trans, key, reqnum
 
 export system.server.set

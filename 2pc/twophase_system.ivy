@@ -103,13 +103,6 @@ isolate system = {
     invariant [refinement1] N ~= 0 & trans.committed(N) -> spec.committed(N)
     invariant [refinement3] N ~= 0 & trans.aborted(N) -> spec.aborted(N)
 
-    invariant [ic3po_global10]	(forall N0 . (spec.committed(N0) -> ~(system.server.state(N0) = system.rm_state.working)))
-    invariant [ic3po_global5_4]	(forall N0 . (trans.aborted(N0) -> ~(system.server.state(N0) = system.rm_state.working)))
-    invariant [ic3po_global8]	(forall N0 . (spec.aborted(N0) | system.server.is_tm(N0) | spec.working(N0) | spec.committed(N0) | spec.prepared(N0)))
-    invariant [ic3po_global1]	(forall N1 . (system.server.is_tm(N1) -> (0 = N1)))
-    invariant [ic3po_global12]	(forall N0 . (spec.prepared(N0) -> ~(system.server.state(N0) = system.rm_state.working)))
-    invariant [ic3po_global10_1]	(forall N2, N0 . (spec.committed(N2) -> ((N0 = N2) | (N0 = 0) | (0 = N2) | spec.committed(N0) | spec.prepared(N0))))
-
 } with spec, nset, trans
 
 export system.server.prepare

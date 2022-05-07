@@ -31,7 +31,7 @@ popd
 
 echo "building ivy"
 pushd .
-sudo apt-get install g++ cmake python-ply python-pygraphviz git python-tk tix pkg-config libssl-dev python-pydot python-pydot-ng
+sudo apt-get install -y g++ cmake python-ply python-pygraphviz git python-tk tix pkg-config libssl-dev python-pydot python-pydot-ng
 cd ivy
 # Use a customized ivy with vmt translation
 git pull https://github.com/GLaDOS-Michigan/ivy.git sift

@@ -6,6 +6,8 @@ This README outlines how to compile and run the SHT, MultiPaxos, Raft, Toy Lock,
 
 ### Build and Compile
 
+To run these scripts, follow the dependency instructions in the parent directory and make sure to have c++ version >= 11
+
 ##### Scripts
 This directory contains 3 scripts:
 
@@ -103,11 +105,4 @@ There is a built-in script to delegate ranges of keys across 3 servers. After st
 - `./sht_server 2`
 
 You can run the following command on `sht_server 0` : `system.server.delegate_(42,1)` which will have delegate keys 333-999 to server 1. Then running `system.server.delegate_(42,2)` on `sht_server 1` to delegate keys 666-999 to server 2.
-
-
-[//]: <> (## Compared Systems)
-
-[//]: <> (For reference here are links to the repos of the systems that Sift was compared against.)
-
-[//]: <> ([Ironfleet](https://github.com/microsoft/Ironclad/tree/main/ironfleet))
 

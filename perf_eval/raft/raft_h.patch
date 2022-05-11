@@ -1,0 +1,49 @@
+--- ../raft/raft_system.h	2022-05-07 15:47:14.685065492 -0400
++++ raft_system.h	2022-05-07 15:46:34.821667008 -0400
+@@ -587,7 +587,8 @@
+     #include <netinet/tcp.h>
+     #include <list>
+     #include <semaphore.h>
+-
++class udp_reader;
++		
+     class tcp_listener;   // class of threads that listen for connections
+     class tcp_callbacks;  // class holding callbacks to ivy
+ 
+@@ -675,7 +676,7 @@
+     class replierslog : public std::vector<nset>{
+         public: size_t __hash() const { return hash_space::hash<std::vector<nset> >()(*this);};
+     };
+-    enum msgkind{rqvote,rqvotenolog,vtcandidate,appendmsg,appendrep,keepalive,nack};
++    enum msgkind{rqvote,rqvotenolog,vtcandidate,appendmsg,appendrep,keepalive,nack,msg_kind__client_req};
+     struct msg {
+     msgkind m_kind;
+     int m_ix;
+@@ -735,7 +736,8 @@
+     tcp_callbacks *net__tcp__impl__cb;             // the callbacks to ivy
+     hash_space::hash_map<int,tcp_queue *> net__tcp__impl__send_queue;   // queues of blocked packets, per socket
+ 
+-
++    udp_reader *net__impl__rdr;
++		
+     tcp_config *the_tcp_config;  // the current configurations
+ 
+     // Get the current TCP configuration. If none, create a default one.
+@@ -778,7 +780,7 @@
+     virtual nset ext__nset__emptyset();
+     virtual void ext__trans__handle_append(const node& src, int t, int ix, __strlit v, int logt, int plogt, bool isrecover);
+     virtual int ext__term__next(int x);
+-    virtual void ext__trans__handle_nack(const node& n, int t, int ix);
++    virtual int ext__net__tcp__connect(const node& other);
+     virtual void ext__net__tcp__accept(int s, const node& other);
+     virtual void ext__protocol1__replicate_entry(const node& n, int t, int ix, int logt, int lastix, int lastlogt);
+     virtual void ext__protocol1__announce_candidacy_nolog(const node& n, int t);
+@@ -808,7 +810,7 @@
+     virtual void ext__protocol1__recv_append_reply(const node& n, int t, int ix, const nset& q);
+     virtual replierslog ext__replierslog__empty();
+     virtual int ext__typeconvert__from_nodeid_to_term(const node& n);
+-    virtual int ext__net__tcp__connect(const node& other);
++    virtual void ext__trans__handle_nack(const node& n, int t, int ix);
+     virtual void ext__replierslog__resize(replierslog& a, int s, const nset& v);
+     virtual void ext__trans__handle_rqst_vote(const node& src, int t, int logt, int ix);
+     virtual int ext__index__prev(int x);

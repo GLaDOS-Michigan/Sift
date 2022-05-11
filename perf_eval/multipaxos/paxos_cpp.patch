@@ -1,0 +1,1322 @@
+--- ../../multipaxos/paxos_system.cpp	2022-05-07 18:41:29.223312751 -0400
++++ paxos_system.cpp	2022-05-08 10:33:10.939178982 -0400
+@@ -2,7 +2,7 @@
+ 
+ #include <sstream>
+ #include <algorithm>
+-
++#include <string>
+ #include <iostream>
+ #include <stdlib.h>
+ #include <sys/types.h>          /* See NOTES */
+@@ -29,6 +29,12 @@
+ #else
+ #include <cstdint>
+ #endif
++#include <arpa/inet.h>
++#include "config.h"
++#include <map>
++#include <iterator>
++
++
+ typedef paxos_system ivy_class;
+ std::ofstream __ivy_out;
+ std::ofstream __ivy_modelfile;
+@@ -198,6 +204,16 @@
+     }
+ };
+ 
++struct thunk__net__impl__handle_recv{
++    paxos_system *__ivy;
++    thunk__net__impl__handle_recv(paxos_system *__ivy): __ivy(__ivy){}
++    void operator()(paxos_system::msg x) const {
++      // std::cout<< "WORKED???\n";
++        __ivy->net__tcp__impl__handle_recv(-1,x);
++    }
++};
++
++
+ /*++
+ Copyright (c) Microsoft Corporation
+ 
+@@ -1114,7 +1130,7 @@
+ #else
+             inetaddr = INADDR_ANY;
+ #endif
+-            inetport = 5990+ id;
++            inetport = 4990+ id;
+     }
+ 
+     // This reverses the default configuration's map. Note, this is a little dangerous
+@@ -1122,19 +1138,35 @@
+     // no way to know the correct range of endpoint ids.
+ 
+     int tcp_config::rev(unsigned long inetaddr, unsigned long inetport) {
+-        return inetport - 5990; // don't use this for real, it's vulnerable
++        return inetport - 4990; // don't use this for real, it's vulnerable
+     }
+ 
+     // construct a sockaddr_in for a specified process id using the configuration
+ 
++    int numclients = 0;
+     void get_tcp_addr(ivy_class *ivy, int my_id, sockaddr_in &myaddr) {
+         memset((char *)&myaddr, 0, sizeof(myaddr));
+         unsigned long inetaddr;
+         unsigned long inetport;
+         ivy->get_tcp_config() -> get(my_id,inetaddr,inetport);
+         myaddr.sin_family = AF_INET;
+-        myaddr.sin_addr.s_addr = htonl(inetaddr);
++        // myaddr.sin_addr.s_addr = htonl(inetaddr);
++        myaddr.sin_addr.s_addr = inet_addr(server_map.at(my_id));
+         myaddr.sin_port = htons(inetport);
++        // if(my_id <0){
++        //   std::cout << " client to: " << numclients << "\n";
++        //   myaddr.sin_port = htons(4942+numclients);
++        //   numclients++;
++        //   if (connect(sock, (struct sockaddr*)&myaddr,
++        //                 sizeof(myaddr)) < 0) {
++        //       printf("\n Error : Connect Failed \n");
++        //     }
++        // }
++//           myaddr.sin_port = htons(inetport);
++//         }else{
++//           myaddr.sin_port = htons(4942);
++//         }
++        std::cout << " conneted to: " << server_map.at(my_id) << "\n";
+     }
+ 
+     // get the process id of a sockaddr_in using the configuration in reverse
+@@ -1164,12 +1196,166 @@
+         thunk__net__tcp__impl__handle_recv rcb;
+         thunk__net__tcp__impl__handle_fail fcb;
+         thunk__net__tcp__impl__handle_connected ccb;
++        thunk__net__impl__handle_recv rccb;
+         tcp_callbacks(const thunk__net__tcp__impl__handle_accept &acb,
+                       const thunk__net__tcp__impl__handle_recv &rcb,
+                       const thunk__net__tcp__impl__handle_fail &fcb,
+-                      const thunk__net__tcp__impl__handle_connected ccb)
+-            : acb(acb), rcb(rcb), fcb(fcb), ccb(ccb) {}
++                      const thunk__net__tcp__impl__handle_connected ccb,
++                      const thunk__net__impl__handle_recv rccb)
++            : acb(acb), rcb(rcb), fcb(fcb), ccb(ccb), rccb(rccb) {}
+     };
++    
++  	class udp_reader : public reader {
++  	    int sock;
++  	    int my_id;
++  	    thunk__net__impl__handle_recv rcb;
++  	    ivy_class *ivy;
++        // udp_config *conf;
++  	    bool bound;
++  	  public:
++  	    udp_reader(int _my_id, thunk__net__impl__handle_recv rcb, ivy_class *ivy)
++  	        : my_id(_my_id), rcb(rcb), ivy(ivy), bound(false) {
++  		sock = socket(AF_INET, SOCK_DGRAM, 0);
++  		if (sock < 0)
++  		    { std::cerr << "cannot create socket\n"; exit(1); }
++
++              }
++              void bind_int() {
++                  if (!bound) {
++                      struct sockaddr_in myaddr;
++                      get_addr_dyno(my_id,myaddr,-1);
++                     std::cout << "*binding id: " << my_id << " port: " << ntohs(myaddr.sin_port) << std::endl;
++                      if (::bind(sock, (struct sockaddr *)&myaddr, sizeof(myaddr)) < 0)
++                          { std::cerr << "bind failed\n"; exit(1); }
++                  }
++                  bound = true;
++              }
++                    
++  	    virtual void bind() {
++  	        ivy -> __lock();  // can be asynchronous, so must lock ivy!
++                  bind_int();
++  	        ivy -> __unlock();
++  	    }
++  	    virtual ~udp_reader() {
++  #ifdef _WIN32
++                  closesocket(sock);
++  #else
++  	        close(sock);
++  #endif
++  	    }
++  	    virtual void get_addr(int my_id, sockaddr_in &myaddr) {
++  		memset((char *)&myaddr, 0, sizeof(myaddr));
++  		unsigned long inetaddr;
++  		unsigned long inetport;
++  	        // if (!conf) {
++//                 conf = ivy -> get_udp_config();
++//                   }
++      // conf -> get(my_id,inetaddr,inetport);
++  		myaddr.sin_family = AF_INET;
++  		myaddr.sin_addr.s_addr = htonl(inetaddr);
++  		myaddr.sin_port = htons(5990+42);
++  	    }
++
++  	    virtual int fdes() {
++  		return sock;
++  	    }
++      
++      
++  	    virtual void get_addr_dyno(int my_id, sockaddr_in &myaddr, int val) {
++  		memset((char *)&myaddr, 0, sizeof(myaddr));
++  		unsigned long inetaddr;
++  		unsigned long inetport;
++  		myaddr.sin_family = AF_INET;
++  		myaddr.sin_addr.s_addr = htonl(inetaddr);
++      if(my_id == -1){
++        myaddr.sin_port = htons(4942 + val); // random port for server frontend (could be anything)
++      }else{
++        myaddr.sin_port = htons(4990+ my_id);
++      }
++    
++      char *addr = server_map.at(my_id);
++      if (inet_aton(addr, &myaddr.sin_addr)==0) {
++              fprintf(stderr, "inet_aton() failed\n");
++              exit(1);
++            }
++
++  	    }
++      
++      
++  	    virtual void read() {
++      // std::cout << "RECEIVING READ \n";
++  	        int len=0;
++                  socklen_t lenlen=4;
++  #ifdef _WIN32
++  	        if (getsockopt(sock,SOL_SOCKET,SO_RCVBUF,(char *)&len,&lenlen))
++  #else
++  	        if (getsockopt(sock,SOL_SOCKET,SO_RCVBUF,&len,&lenlen))
++  #endif
++  	            { perror("getsockopt failed"); exit(1); }
++  	        std::vector<char> buf(len);
++  	        int bytes;
++  		if ((bytes = recvfrom(sock,&buf[0],len,0,0,0)) < 0)
++  		    { std::cerr << "recvfrom failed\n"; exit(1); }
++  	        buf.resize(bytes);
++  	        paxos_system::msg pkt;
++  	        try {
++  		    ivy_binary_deser ds(buf);
++          // std::cout << "Bbuff =  " << buf.size() << "\n";
++  		    __deser(ds,pkt);
++          buf.clear(); 
++  	            if (ds.pos < buf.size())
++  	                throw deser_err();
++                  } catch (deser_err &){
++  		    std::cout << "BAD PACKET RECEIVED (bad formatting)" << sock << "\n";
++  		    return;
++  		}
++  		ivy->__lock();
++  		rcb(pkt);
++  		ivy->__unlock();
++  	    }
++  	    virtual void write(int dst, paxos_system::msg pkt) {
++  	        bind_int();
++  		struct sockaddr_in dstaddr;
++  		get_addr_dyno(dst,dstaddr,-1);
++  		ivy_binary_ser sr;
++  	        __ser(sr,pkt);
++  		//std::cout << "";
++  		if (sendto(sock,&sr.res[0],sr.res.size(),0,(sockaddr *)&dstaddr,sizeof(sockaddr_in)) < 0) 
++  #ifdef _WIN32
++  		     { std::cerr << "sendto failed " << WSAGetLastError() << "\n"; exit(1); }
++  #else
++  		     { std::cerr << "sendto failed\n"; exit(1); }
++  #endif
++      
++  	    }
++      
++      
++      
++  	    virtual void writeToFRONTEND(int dst, paxos_system::msg pkt) {
++  	        bind_int();          
++  		struct sockaddr_in dstaddr;
++  		ivy_binary_ser sr;
++  	        __ser(sr,pkt);
++
++                      struct sockaddr_in serveraddr;
++						// std::cout << "SENDING TO CLIENT" << pkt.m_value << "\n";
++											
++                      get_addr_dyno(-1,serveraddr,std::stoi(pkt.m_value)/100);
++                         if (sendto(sock,&sr.res[0],sr.res.size(),0,(sockaddr *)&serveraddr,sizeof(sockaddr_in)) < 0)
++                     #ifdef _WIN32
++                              { std::cerr << "sendto failed " << WSAGetLastError() << "\n"; exit(1); }
++                     #else
++                              { std::cerr << "sendto failed\n"; exit(1); }
++                     #endif
++                  
++           }
++      
++        // }
++      
++      
++  	};
++    
++    
+ 
+     // This is a general class for an asynchronous task. These objects are called in a loop
+     // by a thread allocated by the runtime. The fdes method returns a file descriptor
+@@ -1208,7 +1394,7 @@
+         // This is called in a loop by the task thread.
+ 
+         virtual void read() {
+-//            std::cout << "RECEIVING\n";
++          
+ 
+             paxos_system::msg pkt;                      // holds received message
+             ivy_socket_deser ds(sock,buf);  // initializer deserialize with any leftover bytes
+@@ -1216,16 +1402,17 @@
+ 
+             try {
+                 __deser(ds,pkt);            // read the message
++                // std::cout << "RECEIVING :: " << pkt << " \n";
+             } 
+-
++               
+             // If packet has bad syntax, we drop it, close the socket, call the "failed"
+             // callback and terminate the task.
+ 
+             catch (deser_err &){
+                 if (ds.pos > 0)
+-                    std::cout << "BAD PACKET RECEIVED\n";
++                    std::cout << "BAD PACKET RECEIVED\n";
+                 else
+-                    std::cout << "EOF ON SOCKET\n";
++                    std::cout << "EOF ON SOCKET\n";
+                 cb.fcb(sock);
+                 close(sock);
+                 sock = -1;
+@@ -1268,12 +1455,12 @@
+         // This is called in a loop by the task thread.
+ 
+         virtual void read() {
+-
++          
+             if (!connected) {
+             
+                 // if the socket is not connected, wait for the queue to be open,
+                 // then connect
+-
++                // std::cout << "";
+                 queue->wait_open();
+                 connect();
+                 return;
+@@ -1327,12 +1514,12 @@
+             
+             ivy->__lock();
+             if (res >= 0) {
+-                // std::cout << "CONNECT SUCCEEDED " << sock << std::endl;
++                // std::cout << "CONNECT SUCCEEDED " << sock << std::endl;
+                 cb.ccb(sock);
+                 connected = true;
+             }
+             else {
+-                // std::cout << "CONNECT FAILED " << sock << std::endl;
++                //std::cout << "CONNECT FAILED " << sock << std::endl;
+                 fail_close();
+             }
+             ivy->__unlock();
+@@ -1387,6 +1574,7 @@
+                 { std::cerr << "cannot listen on socket\n"; exit(1); }
+ 
+             ivy -> __unlock();
++            // try to connect to client?? 
+         }
+ 
+         // After binding, the thread calls read in a loop. In this case, we don't read,
+@@ -1402,6 +1590,7 @@
+             sockaddr_in other_addr;
+             socklen_t addrlen = sizeof(other_addr);    
+             int new_sock = accept(sock, (sockaddr *)&other_addr, &addrlen);
++            // ivy->net__tcp__impl__handle_connected(new_sock);
+ 
+             // If this fails, something is very wrong: fail stop.
+             if (new_sock < 0)
+@@ -1409,7 +1598,15 @@
+ 
+             // Get the endpoint id of the other from its address.
+             int other = get_tcp_id(ivy,other_addr);
+-
++            // std::cout << "";
++           
++           //  if(other < 0){
++          //     char buffer[1024];
++          //     bzero(buffer, sizeof(buffer));
++          //     printf("Message From TCP client: ");
++          //     write(new_sock, "test", 1024);
++          //     close(new_sock);
++          // }
+             // Run the "accept" callback. Since it's async, we must lock.
+             ivy->__lock();
+             cb.acb(new_sock,other);
+@@ -1597,10 +1794,6 @@
+         }
+     }
+ }
+-void paxos_system::ext__protocol3__recv_two_b(const node& self, const node& n, unsigned long long i, unsigned long long r, __strlit v, const ballot_status_array& inst){
+-    {
+-    }
+-}
+ void paxos_system::ext__system__server__start_round(){
+     {
+         {
+@@ -1625,7 +1818,7 @@
+                 system__server__joined_votes = ext__votemap_seg__make(system__server__my_votes, system__server__first_undecided, loc__end);
+                 ext__trans__send_one_a(system__server__current_round, system__server__first_undecided);
+                 ext__trans__send_one_b(self, system__server__current_round, system__server__joined_votes);
+-                ext__protocol3__start_round(self, system__server__current_round, system__server__first_undecided, system__server__joined, system__server__joined_votes);
++                ext__protocol4__start_round(self, system__server__current_round, system__server__first_undecided, system__server__joined, system__server__joined_votes);
+             }
+         }
+     }
+@@ -1650,56 +1843,44 @@
+     }
+     return y;
+ }
+-void paxos_system::ext__system__server__decide(unsigned long long i, __strlit v){
+-    imp__system__server__decide(i, v);
+-}
+-void paxos_system::ext__ballot_status_array__set(ballot_status_array& a, unsigned long long x, const ballot_status& y){
+-    {
+-
+-        if (0 <= x && x < (unsigned long long)a.size())
+-            a[x] = y;
+-    }
+-}
+-void paxos_system::ext__trans__recv_decision(unsigned long long i, __strlit v){
++paxos_system::votemap_seg paxos_system::ext__votemap_seg__make(const votemap& data, unsigned long long begin, unsigned long long end){
++    paxos_system::votemap_seg seg;
++    seg.offset = (unsigned long long)___ivy_choose(0,"fml:seg",0);
+     {
+-        if(!system__server__is_decided(i)){
++        seg.offset = begin;
++        seg.elems = ext__votemap__empty();
++        if(((begin < votemap__end(data)) && ((end < votemap__end(data)) || (end == votemap__end(data))))){
+             {
++                unsigned long long loc__idx;
++    loc__idx = (unsigned long long)___ivy_choose(0,"loc:idx",696);
+                 {
+-                    unsigned long long loc__0;
+-    loc__0 = (unsigned long long)___ivy_choose(0,"loc:0",695);
+-                    unsigned long long loc__1;
+-    loc__1 = (unsigned long long)___ivy_choose(0,"loc:1",695);
+-                    {
+-                        loc__0 = ext__log__size(system__server__my_log);
+-                        loc__1 = ext__inst__next(i);
+-                        if(((loc__0 < loc__1) || (loc__0 == loc__1))){
+-                            {
+-                                {
+-                                    unsigned long long loc__0;
+-    loc__0 = (unsigned long long)___ivy_choose(0,"loc:0",694);
+-                                    {
+-                                        loc__0 = ext__inst__next(i);
+-                                        ext__log__resize(system__server__my_log, loc__0, no_decision);
+-                                    }
+-                                }
+-                            }
++                    loc__idx = begin;
++                    while((loc__idx < end)){
++                        {
++                            ext__votemap__append(seg.elems, votemap__value(data,loc__idx));
++                            loc__idx = ext__inst__next(loc__idx);
+                         }
+                     }
+                 }
+-                {
+-                    decision_struct loc__d;
+-    loc__d.present = (bool)___ivy_choose(0,"loc:d",696);
+-                    {
+-                        loc__d.present = true;
+-                        loc__d.decision = v;
+-                        ext__log__set(system__server__my_log, i, loc__d);
+-                        ext__system__server__update_first_undecided(i);
+-                        ext__system__server__decide(i, v);
+-                    }
+-                }
+             }
+         }
+     }
++    return seg;
++}
++void paxos_system::ext__system__server__leader_election__notify_join_round(unsigned long long r){
++    {
++        if(leader_of(self,r)){
++            system__server__leader_election__last_start_round = system__server__leader_election__my_time;
++        }
++        system__server__leader_election__last_heard_from_leader = system__server__leader_election__my_time;
++    }
++}
++void paxos_system::ext__ballot_status_array__set(ballot_status_array& a, unsigned long long x, const ballot_status& y){
++    {
++
++        if (0 <= x && x < (unsigned long long)a.size())
++            a[x] = y;
++    }
+ }
+ paxos_system::decision_struct paxos_system::ext__system__server__query(unsigned long long i){
+     paxos_system::decision_struct d;
+@@ -1719,17 +1900,27 @@
+ }
+ void paxos_system::ext__trans__send_keep_alive(unsigned long long r){
+     {
++      // std::cout<< "keepALIVE \n"; 
+         {
+             msg loc__m;
+-    loc__m.m_kind = (msg_kind)___ivy_choose(0,"loc:m",686);
+-    loc__m.m_round = (unsigned long long)___ivy_choose(0,"loc:m",686);
+-    loc__m.m_inst = (unsigned long long)___ivy_choose(0,"loc:m",686);
+-    loc__m.m_votemap.offset = (unsigned long long)___ivy_choose(0,"loc:m",686);
++    loc__m.m_kind = (msg_kind)___ivy_choose(0,"loc:m",689);
++    loc__m.m_round = (unsigned long long)___ivy_choose(0,"loc:m",689);
++    loc__m.m_inst = (unsigned long long)___ivy_choose(0,"loc:m",689);
++    loc__m.m_votemap.offset = (unsigned long long)___ivy_choose(0,"loc:m",689);
+             {
+                 loc__m.m_kind = msg_kind__keep_alive;
+                 loc__m.m_node = self;
+                 loc__m.m_round = r;
+                 ext__trans__bcast(loc__m);
++                ext__net__tcp__send(-1,loc__m);
++//                 ext__net__tcp__send(2,loc__m);
++//                 ext__net__tcp__send(3,loc__m);
++//                 ext__net__tcp__send(4,loc__m);
++//                 ext__net__tcp__send(5,loc__m);
++//                 ext__net__tcp__send(6,loc__m);
++//                 ext__net__tcp__send(7,loc__m);
++//                 ext__net__tcp__send(8,loc__m);
++//                 ext__net__tcp__send(9,loc__m);
+             }
+         }
+     }
+@@ -1743,7 +1934,7 @@
+         system__server__joined = empty_nset;
+     }
+ }
+-void paxos_system::ext__protocol3__join_round(const node& n, unsigned long long r){
++void paxos_system::ext__protocol4__propose(const node& n, unsigned long long next_i, __strlit v){
+     {
+     }
+ }
+@@ -1751,9 +1942,29 @@
+     {
+     }
+ }
+-void paxos_system::ext__protocol3__propose(const node& n, unsigned long long next_i, __strlit v){
++bool paxos_system::ext__net__tcp__send(int s, const msg& p){
++    bool ok;
++    ok = (bool)___ivy_choose(0,"fml:ok",0);
+     {
++                        ivy_binary_ser sr;
++                        __ser(sr,p);
++                       // std::cout << "\n";
++        
++                        // if the send queue for this sock doesn's exist, it isn't open,
++                        // so the client has vioalted the precondition. we do the bad client
++                        // the service of not crashing.
++        
++                        if (net__tcp__impl__send_queue.find(s) == net__tcp__impl__send_queue.end())
++                            ok = true;
++                          
++                        else {
++                            // get the send queue, and enqueue the packet, returning false if
++                            // the queue is closed.
++                            // std::cout << "\n";
++                            ok = !net__tcp__impl__send_queue[s]->enqueue_swap(sr.res);
++                       }
+     }
++    return ok;
+ }
+ void paxos_system::ext__trans__debug_receiving(const msg& m){
+     imp__trans__debug_receiving(m);
+@@ -1775,7 +1986,7 @@
+     s = (int)___ivy_choose(0,"fml:s",0);
+     {
+         s = make_tcp_socket();
+-        // std::cout << "SOCKET " << s << std::endl;
++       // std::cout << "SOCKET " << s << std::endl;
+ 
+         // create a send queue for this socket, if needed, along with
+         // its thread. if the queue exists, it must be closed, so
+@@ -1794,17 +2005,13 @@
+     {
+     }
+ }
+-void paxos_system::ext__votemap_seg__resize(votemap_seg& seg, unsigned long long x, const vote_struct& y){
++void paxos_system::ext__protocol4__start_round(const node& n, unsigned long long r, unsigned long long i, const nset& init_joined, const votemap_seg& init_votes){
+     {
+-        unsigned long long __tmp3;
+-        __tmp3 = x;
+-        unsigned long long __tmp4;
+-        __tmp4 = seg.offset;
+-        ext__votemap__resize(seg.elems, ( __tmp3 < __tmp4 ? 0 : __tmp3 - __tmp4), y);
+     }
+ }
+ void paxos_system::ext__net__tcp__recv(int s, const msg& p){
+     {
++      // std::cout << "  ";
+         ext__net__recv(p);
+     }
+ }
+@@ -1824,37 +2031,8 @@
+     }
+     return a;
+ }
+-bool paxos_system::ext__net__tcp__send(int s, const msg& p){
+-    bool ok;
+-    ok = (bool)___ivy_choose(0,"fml:ok",0);
+-    {
+-                        ivy_binary_ser sr;
+-                        __ser(sr,p);
+-        //                std::cout << "SENDING\n";
+-        
+-                        // if the send queue for this sock doesn's exist, it isn't open,
+-                        // so the client has vioalted the precondition. we do the bad client
+-                        // the service of not crashing.
+-        
+-                        if (net__tcp__impl__send_queue.find(s) == net__tcp__impl__send_queue.end())
+-                            ok = true;
+-        
+-                        else {
+-                            // get the send queue, and enqueue the packet, returning false if
+-                            // the queue is closed.
+-        
+-                            ok = !net__tcp__impl__send_queue[s]->enqueue_swap(sr.res);
+-                       }
+-    }
+-    return ok;
+-}
+-void paxos_system::ext__log__resize(log& a, unsigned long long s, const decision_struct& v){
++void paxos_system::ext__protocol4__recv_two_b(const node& self, const node& n, unsigned long long i, unsigned long long r, __strlit v, const ballot_status_array& inst){
+     {
+-
+-        unsigned __old_size = a.size();
+-        a.resize(s);
+-        for (unsigned i = __old_size; i < (unsigned)s; i++)
+-            a[i] = v;
+     }
+ }
+ bool paxos_system::ext__system__server__propose(__strlit v){
+@@ -1865,7 +2043,7 @@
+             {
+                 ext__trans__send_two_a(system__server__current_round, system__server__next_inst, v);
+                 system__server__next_inst = ext__inst__next(system__server__next_inst);
+-                ext__protocol3__propose(self, system__server__next_inst, v);
++                ext__protocol4__propose(self, system__server__next_inst, v);
+                 r = true;
+             }
+         }
+@@ -1888,10 +2066,10 @@
+     {
+         {
+             msg loc__m;
+-    loc__m.m_kind = (msg_kind)___ivy_choose(0,"loc:m",688);
+-    loc__m.m_round = (unsigned long long)___ivy_choose(0,"loc:m",688);
+-    loc__m.m_inst = (unsigned long long)___ivy_choose(0,"loc:m",688);
+-    loc__m.m_votemap.offset = (unsigned long long)___ivy_choose(0,"loc:m",688);
++    loc__m.m_kind = (msg_kind)___ivy_choose(0,"loc:m",690);
++    loc__m.m_round = (unsigned long long)___ivy_choose(0,"loc:m",690);
++    loc__m.m_inst = (unsigned long long)___ivy_choose(0,"loc:m",690);
++    loc__m.m_votemap.offset = (unsigned long long)___ivy_choose(0,"loc:m",690);
+             {
+                 loc__m.m_kind = msg_kind__one_b;
+                 loc__m.m_round = r;
+@@ -1902,38 +2080,20 @@
+         }
+     }
+ }
+-void paxos_system::ext__net__send(const node& dst, const msg& v){
++void paxos_system::ext__trans__send_one_a(unsigned long long r, unsigned long long i){
+     {
+-        if(!net__proc__isup[dst]){
+-            if(!net__proc__pend[dst]){
+-                {
+-                    net__proc__sock[dst] = ext__net__tcp__connect(dst);
+-                    net__proc__pend[dst] = true;
+-                }
+-            }
+-        }
+-        else {
++        {
++            msg loc__m;
++    loc__m.m_kind = (msg_kind)___ivy_choose(0,"loc:m",691);
++    loc__m.m_round = (unsigned long long)___ivy_choose(0,"loc:m",691);
++    loc__m.m_inst = (unsigned long long)___ivy_choose(0,"loc:m",691);
++    loc__m.m_votemap.offset = (unsigned long long)___ivy_choose(0,"loc:m",691);
+             {
+-                bool loc__0;
+-    loc__0 = (bool)___ivy_choose(0,"loc:0",698);
+-                {
+-                    loc__0 = ext__net__tcp__send(net__proc__sock[dst], v);
+-                    {
+-                        bool loc__ok;
+-    loc__ok = (bool)___ivy_choose(0,"loc:ok",697);
+-                        {
+-                            loc__ok = loc__0;
+-                            if(!loc__ok){
+-                                {
+-                                    ext__net__tcp__close(net__proc__sock[dst]);
+-                                    net__proc__sock[dst] = ext__net__tcp__connect(dst);
+-                                    net__proc__isup[dst] = false;
+-                                    net__proc__pend[dst] = true;
+-                                }
+-                            }
+-                        }
+-                    }
+-                }
++                loc__m.m_kind = msg_kind__one_a;
++                loc__m.m_round = r;
++                loc__m.m_node = self;
++                loc__m.m_inst = i;
++                ext__trans__bcast(loc__m);
+             }
+         }
+     }
+@@ -1959,10 +2119,6 @@
+             a[x] = y;
+     }
+ }
+-void paxos_system::ext__protocol3__cast_vote(const node& n, unsigned long long i, unsigned long long r, __strlit v, const votemap& new_votes){
+-    {
+-    }
+-}
+ void paxos_system::ext__net__tcp__close(int s){
+     {
+         
+@@ -1993,15 +2149,15 @@
+                 ext__system__server__change_round(r);
+                 {
+                     votemap_seg loc__0;
+-    loc__0.offset = (unsigned long long)___ivy_choose(0,"loc:0",691);
++    loc__0.offset = (unsigned long long)___ivy_choose(0,"loc:0",693);
+                     {
+                         loc__0 = ext__votemap_seg__make(system__server__my_votes, i, (((i < votemap__end(system__server__my_votes)) || (i == votemap__end(system__server__my_votes))) ? votemap__end(system__server__my_votes) : i));
+                         {
+                             votemap_seg loc__votes;
+-    loc__votes.offset = (unsigned long long)___ivy_choose(0,"loc:votes",690);
++    loc__votes.offset = (unsigned long long)___ivy_choose(0,"loc:votes",692);
+                             {
+                                 loc__votes = loc__0;
+-                                ext__protocol3__receive_one_a(self, src, r, i, loc__votes);
++                                ext__protocol4__receive_one_a(self, src, r, i, loc__votes);
+                                 ext__trans__send_one_b(src, r, loc__votes);
+                             }
+                         }
+@@ -2015,15 +2171,15 @@
+     bool res;
+     res = (bool)___ivy_choose(0,"fml:res",0);
+     {
++        unsigned long long __tmp3;
++        __tmp3 = system__server__leader_election__my_time;
++        unsigned long long __tmp4;
++        __tmp4 = system__server__leader_election__last_heard_from_leader;
+         unsigned long long __tmp5;
+         __tmp5 = system__server__leader_election__my_time;
+         unsigned long long __tmp6;
+         __tmp6 = system__server__leader_election__last_heard_from_leader;
+-        unsigned long long __tmp7;
+-        __tmp7 = system__server__leader_election__my_time;
+-        unsigned long long __tmp8;
+-        __tmp8 = system__server__leader_election__last_heard_from_leader;
+-        res = ((system__server__leader_election__timeout < ( __tmp5 < __tmp6 ? 0 : __tmp5 - __tmp6)) || (( __tmp7 < __tmp8 ? 0 : __tmp7 - __tmp8) == system__server__leader_election__timeout));
++        res = ((system__server__leader_election__timeout < ( __tmp3 < __tmp4 ? 0 : __tmp3 - __tmp4)) || (( __tmp5 < __tmp6 ? 0 : __tmp5 - __tmp6) == system__server__leader_election__timeout));
+     }
+     return res;
+ }
+@@ -2039,7 +2195,7 @@
+                         system__server__next_inst = votemap_seg__upper(system__server__joined_votes);
+                         {
+                             unsigned long long loc__j;
+-    loc__j = (unsigned long long)___ivy_choose(0,"loc:j",693);
++    loc__j = (unsigned long long)___ivy_choose(0,"loc:j",695);
+                             {
+                                 loc__j = votemap_seg__first(system__server__joined_votes);
+                                 while(!(loc__j == votemap_seg__upper(system__server__joined_votes))){
+@@ -2058,7 +2214,7 @@
+                         }
+                     }
+                 }
+-                ext__protocol3__receive_one_b(self, src, r, votes, system__server__joined, system__server__joined_votes);
++                ext__protocol4__receive_one_b(self, src, r, votes, system__server__joined, system__server__joined_votes);
+             }
+         }
+     }
+@@ -2111,29 +2267,46 @@
+     }
+     return r;
+ }
+-paxos_system::votemap_seg paxos_system::ext__votemap_seg__make(const votemap& data, unsigned long long begin, unsigned long long end){
+-    paxos_system::votemap_seg seg;
+-    seg.offset = (unsigned long long)___ivy_choose(0,"fml:seg",0);
++void paxos_system::ext__trans__recv_decision(unsigned long long i, __strlit v){
+     {
+-        seg.offset = begin;
+-        seg.elems = ext__votemap__empty();
+-        if(((begin < votemap__end(data)) && ((end < votemap__end(data)) || (end == votemap__end(data))))){
++        if(!system__server__is_decided(i)){
+             {
+-                unsigned long long loc__idx;
+-    loc__idx = (unsigned long long)___ivy_choose(0,"loc:idx",687);
+                 {
+-                    loc__idx = begin;
+-                    while((loc__idx < end)){
+-                        {
+-                            ext__votemap__append(seg.elems, votemap__value(data,loc__idx));
+-                            loc__idx = ext__inst__next(loc__idx);
++                    unsigned long long loc__0;
++    loc__0 = (unsigned long long)___ivy_choose(0,"loc:0",687);
++                    unsigned long long loc__1;
++    loc__1 = (unsigned long long)___ivy_choose(0,"loc:1",687);
++                    {
++                        loc__0 = ext__log__size(system__server__my_log);
++                        loc__1 = ext__inst__next(i);
++                        if(((loc__0 < loc__1) || (loc__0 == loc__1))){
++                            {
++                                {
++                                    unsigned long long loc__0;
++    loc__0 = (unsigned long long)___ivy_choose(0,"loc:0",686);
++                                    {
++                                        loc__0 = ext__inst__next(i);
++                                        ext__log__resize(system__server__my_log, loc__0, no_decision);
++                                    }
++                                }
++                            }
+                         }
+                     }
+                 }
++                {
++                    decision_struct loc__d;
++    loc__d.present = (bool)___ivy_choose(0,"loc:d",688);
++                    {
++                        loc__d.present = true;
++                        loc__d.decision = v;
++                        ext__log__set(system__server__my_log, i, loc__d);
++                        ext__system__server__update_first_undecided(i);
++                        ext__system__server__decide(i, v);
++                    }
++                }
+             }
+         }
+     }
+-    return seg;
+ }
+ paxos_system::node__iter__t paxos_system::ext__node__iter__create(const node& x){
+     paxos_system::node__iter__t y;
+@@ -2148,15 +2321,15 @@
+     {
+         {
+             node loc__other;
+-            int __tmp9;
+-            __tmp9 = 0;
++            int __tmp7;
++            __tmp7 = 0;
+             for (int X__0 = 0; X__0 < node__size; X__0++) {
+                 if(((net__proc__isup[X__0] || net__proc__pend[X__0]) && (net__proc__sock[X__0] == s))){
+                     loc__other = X__0;
+-                    __tmp9= 1;
++                    __tmp7= 1;
+                 }
+             }
+-            if(__tmp9){
++            if(__tmp7){
+                 {
+                     net__proc__isup[loc__other] = false;
+                     net__proc__pend[loc__other] = false;
+@@ -2210,6 +2383,17 @@
+                                     ext__trans__recv_keep_alive(v.m_node, v.m_round);
+                                 }
+                             }
++                            else {
++                              if((v.m_kind == msg_kind__client_req)){
++                                  {
++                                    
++                                    // std::cout << "\n";
++                                    // __ivy_out  << "= " << ext__system__server__propose(std::to_string(v.m_round)) << std::endl;
++                                    ext__system__server__propose(std::to_string(v.m_round));
++                                     // ext__trans__recv_keep_alive(v.m_node, v.m_round);
++                                  }
++                              }
++                            }
+                         }
+                     }
+                 }
+@@ -2223,24 +2407,41 @@
+         a.push_back(v);
+     }
+ }
+-void paxos_system::ext__protocol3__start_round(const node& n, unsigned long long r, unsigned long long i, const nset& init_joined, const votemap_seg& v){
+-    {
+-    }
+-}
+-void paxos_system::ext__trans__send_one_a(unsigned long long r, unsigned long long i){
++void paxos_system::ext__net__send(const node& dst, const msg& v){
+     {
+-        {
+-            msg loc__m;
+-    loc__m.m_kind = (msg_kind)___ivy_choose(0,"loc:m",689);
+-    loc__m.m_round = (unsigned long long)___ivy_choose(0,"loc:m",689);
+-    loc__m.m_inst = (unsigned long long)___ivy_choose(0,"loc:m",689);
+-    loc__m.m_votemap.offset = (unsigned long long)___ivy_choose(0,"loc:m",689);
++        if(!net__proc__isup[dst]){
++            if(!net__proc__pend[dst]){
++                {
++                  
++                    net__proc__sock[dst] = ext__net__tcp__connect(dst);
++                    net__proc__pend[dst] = true;
++                }
++            }
++        }
++        else {
+             {
+-                loc__m.m_kind = msg_kind__one_a;
+-                loc__m.m_round = r;
+-                loc__m.m_node = self;
+-                loc__m.m_inst = i;
+-                ext__trans__bcast(loc__m);
++              // std::cout << "\n";
++                bool loc__0;
++    loc__0 = (bool)___ivy_choose(0,"loc:0",698);
++                {
++                    loc__0 = ext__net__tcp__send(net__proc__sock[dst], v);
++                    {
++                        bool loc__ok;
++    loc__ok = (bool)___ivy_choose(0,"loc:ok",697);
++                        {
++                            loc__ok = loc__0;
++                            if(!loc__ok){
++                                {
++                                  std::cout << "\n";
++                                    ext__net__tcp__close(net__proc__sock[dst]);
++                                    net__proc__sock[dst] = ext__net__tcp__connect(dst);
++                                    net__proc__isup[dst] = false;
++                                    net__proc__pend[dst] = true;
++                                }
++                            }
++                        }
++                    }
++                }
+             }
+         }
+     }
+@@ -2258,12 +2459,12 @@
+ bool nset__member(const paxos_system::node& N, const paxos_system::nset& S){
+                                             bool val;
+     val = (bool)___ivy_choose(0,"ret:val",0);
+-                                            int __tmp10;
+-                                            __tmp10 = 0;
++                                            int __tmp8;
++                                            __tmp8 = 0;
+                                             for (int I = 0; I < nset__arr__end(S.repr); I++) {
+-                                                if ((((0 < I) || (0 == I)) && (I < nset__arr__end(S.repr)) && nset__arr__value_is(S.repr,I,N))) __tmp10 = 1;
++                                                if ((((0 < I) || (0 == I)) && (I < nset__arr__end(S.repr)) && nset__arr__value_is(S.repr,I,N))) __tmp8 = 1;
+                                             }
+-                                            val = __tmp10;
++                                            val = __tmp8;
+                                             return val;
+ }
+ int nset__arr__end(const paxos_system::nset__arr& a){
+@@ -2406,6 +2607,11 @@
+     }
+     return res;
+ }
++void paxos_system::ext__system__server__decide(unsigned long long i, __strlit v){
++  // std::cout<<"DECIDE _+++++++++" << self << "\n";
++  
++    imp__system__server__decide(i, v);
++}
+ void paxos_system::ext__votemap__resize(votemap& a, unsigned long long s, const vote_struct& v){
+     {
+ 
+@@ -2460,15 +2666,15 @@
+     bool res;
+     res = (bool)___ivy_choose(0,"fml:res",0);
+     {
++        unsigned long long __tmp9;
++        __tmp9 = system__server__leader_election__my_time;
++        unsigned long long __tmp10;
++        __tmp10 = system__server__leader_election__last_start_round;
+         unsigned long long __tmp11;
+         __tmp11 = system__server__leader_election__my_time;
+         unsigned long long __tmp12;
+         __tmp12 = system__server__leader_election__last_start_round;
+-        unsigned long long __tmp13;
+-        __tmp13 = system__server__leader_election__my_time;
+-        unsigned long long __tmp14;
+-        __tmp14 = system__server__leader_election__last_start_round;
+-        res = ((system__server__leader_election__timeout < ( __tmp11 < __tmp12 ? 0 : __tmp11 - __tmp12)) || (( __tmp13 < __tmp14 ? 0 : __tmp13 - __tmp14) == system__server__leader_election__timeout));
++        res = ((system__server__leader_election__timeout < ( __tmp9 < __tmp10 ? 0 : __tmp9 - __tmp10)) || (( __tmp11 < __tmp12 ? 0 : __tmp11 - __tmp12) == system__server__leader_election__timeout));
+     }
+     return res;
+ }
+@@ -2477,7 +2683,7 @@
+         if(((votemap__end(system__server__my_votes) < i) || (votemap__end(system__server__my_votes) == i))){
+             {
+                 unsigned long long loc__0;
+-    loc__0 = (unsigned long long)___ivy_choose(0,"loc:0",705);
++    loc__0 = (unsigned long long)___ivy_choose(0,"loc:0",704);
+                 {
+                     loc__0 = ext__inst__next(i);
+                     ext__votemap__resize(system__server__my_votes, loc__0, not_a_vote);
+@@ -2486,53 +2692,67 @@
+         }
+         {
+             vote_struct loc__new_vote;
+-    loc__new_vote.maxr = (unsigned long long)___ivy_choose(0,"loc:new_vote",706);
++    loc__new_vote.maxr = (unsigned long long)___ivy_choose(0,"loc:new_vote",705);
+             {
+                 loc__new_vote.maxr = system__server__current_round;
+                 loc__new_vote.maxv = v;
+                 ext__votemap__set(system__server__my_votes, i, loc__new_vote);
+-                ext__protocol3__cast_vote(self, i, system__server__current_round, v, system__server__my_votes);
++                ext__protocol4__cast_vote(self, i, system__server__current_round, v, system__server__my_votes);
+                 ext__trans__send_two_b(leader, system__server__current_round, i, v);
+             }
+         }
+     }
+ }
++void paxos_system::ext__protocol4__receive_one_a(const node& n, const node& src, unsigned long long r, unsigned long long i, const votemap_seg& v){
++    {
++    }
++}
+ void paxos_system::ext__votemap_seg__set(votemap_seg& seg, unsigned long long x, const vote_struct& y){
+     {
+-        unsigned long long __tmp15;
+-        __tmp15 = x;
+-        unsigned long long __tmp16;
+-        __tmp16 = seg.offset;
+-        ext__votemap__set(seg.elems, ( __tmp15 < __tmp16 ? 0 : __tmp15 - __tmp16), y);
++        unsigned long long __tmp13;
++        __tmp13 = x;
++        unsigned long long __tmp14;
++        __tmp14 = seg.offset;
++        ext__votemap__set(seg.elems, ( __tmp13 < __tmp14 ? 0 : __tmp13 - __tmp14), y);
++    }
++}
++void paxos_system::ext__protocol4__receive_one_b(const node& n, const node& src, unsigned long long r, const votemap_seg& m, const nset& new_joined, const votemap_seg& new_votes){
++    {
+     }
+ }
+ void paxos_system::ext__trans__send_decision(unsigned long long i, __strlit v){
+     {
+         {
++          // std::cout<< "decide \n";
++          
++          
+             msg loc__m;
+-    loc__m.m_kind = (msg_kind)___ivy_choose(0,"loc:m",704);
+-    loc__m.m_round = (unsigned long long)___ivy_choose(0,"loc:m",704);
+-    loc__m.m_inst = (unsigned long long)___ivy_choose(0,"loc:m",704);
+-    loc__m.m_votemap.offset = (unsigned long long)___ivy_choose(0,"loc:m",704);
++    loc__m.m_kind = (msg_kind)___ivy_choose(0,"loc:m",706);
++    loc__m.m_round = (unsigned long long)___ivy_choose(0,"loc:m",706);
++    loc__m.m_inst = (unsigned long long)___ivy_choose(0,"loc:m",706);
++    loc__m.m_votemap.offset = (unsigned long long)___ivy_choose(0,"loc:m",706);
+             {
+                 loc__m.m_kind = msg_kind__decide;
+                 loc__m.m_inst = i;
+                 loc__m.m_value = v;
+                 loc__m.m_node = self;
++                if(self == 0){
++                   net__impl__rdr->writeToFRONTEND(-1,loc__m);
++                }
+                 ext__trans__bcast(loc__m);
++                
++                
+             }
+         }
+     }
+ }
+-void paxos_system::ext__trans__recv_keep_alive(const node& src, unsigned long long r){
++void paxos_system::ext__votemap_seg__resize(votemap_seg& seg, unsigned long long x, const vote_struct& y){
+     {
+-        if((system__server__current_round < r)){
+-            {
+-                ext__system__server__change_round(r);
+-                ext__protocol3__join_round(self, r);
+-            }
+-        }
+-        system__server__leader_election__last_heard_from_leader = system__server__leader_election__my_time;
++        unsigned long long __tmp15;
++        __tmp15 = x;
++        unsigned long long __tmp16;
++        __tmp16 = seg.offset;
++        ext__votemap__resize(seg.elems, ( __tmp15 < __tmp16 ? 0 : __tmp15 - __tmp16), y);
+     }
+ }
+ void paxos_system::ext__system__server__timer__sec__timeout(){
+@@ -2579,6 +2799,17 @@
+         }
+     }
+ }
++void paxos_system::ext__trans__recv_keep_alive(const node& src, unsigned long long r){
++    {
++        if((system__server__current_round < r)){
++            {
++                ext__system__server__change_round(r);
++                ext__protocol4__join_round(self, r);
++            }
++        }
++        system__server__leader_election__last_heard_from_leader = system__server__leader_election__my_time;
++    }
++}
+ void paxos_system::ext__system__server__leader_election__tick(){
+     {
+         system__server__leader_election__my_time = ext__time__next(system__server__leader_election__my_time);
+@@ -2630,25 +2861,6 @@
+ void paxos_system::net__tcp__impl__handle_accept(int s, const node& other){
+     ext__net__tcp__accept(s, other);
+ }
+-void paxos_system::ext__trans__send_two_b(const node& dst, unsigned long long r, unsigned long long i, __strlit v){
+-    {
+-        {
+-            msg loc__m;
+-    loc__m.m_kind = (msg_kind)___ivy_choose(0,"loc:m",712);
+-    loc__m.m_round = (unsigned long long)___ivy_choose(0,"loc:m",712);
+-    loc__m.m_inst = (unsigned long long)___ivy_choose(0,"loc:m",712);
+-    loc__m.m_votemap.offset = (unsigned long long)___ivy_choose(0,"loc:m",712);
+-            {
+-                loc__m.m_kind = msg_kind__two_b;
+-                loc__m.m_node = self;
+-                loc__m.m_round = r;
+-                loc__m.m_inst = i;
+-                loc__m.m_value = v;
+-                ext__trans__unicast(dst, loc__m);
+-            }
+-        }
+-    }
+-}
+ paxos_system::ballot_status paxos_system::ext__ballot_status_array__get(const ballot_status_array& a, unsigned long long x){
+     paxos_system::ballot_status y;
+     y.active = (bool)___ivy_choose(0,"fml:y",0);
+@@ -2662,31 +2874,62 @@
+ }
+ void paxos_system::net__tcp__impl__handle_recv(int s, const msg& x){
+     ext__net__tcp__recv(s, x);
++    // ext__trans__unicast(s, x);
+ }
+ void paxos_system::net__tcp__impl__handle_connected(int s){
++  // std::cout << "\n";
+     ext__net__tcp__connected(s);
+ }
+-void paxos_system::ext__protocol3__receive_one_b(const node& n, const node& src, unsigned long long r, const votemap_seg& m, const nset& new_joined, const votemap_seg& new_votes){
++void paxos_system::ext__trans__send_two_a(unsigned long long r, unsigned long long i, __strlit v){
+     {
++        {
++            msg loc__m;
++    loc__m.m_kind = (msg_kind)___ivy_choose(0,"loc:m",712);
++    loc__m.m_round = (unsigned long long)___ivy_choose(0,"loc:m",712);
++    loc__m.m_inst = (unsigned long long)___ivy_choose(0,"loc:m",712);
++    loc__m.m_votemap.offset = (unsigned long long)___ivy_choose(0,"loc:m",712);
++            {
++                loc__m.m_kind = msg_kind__two_a;
++                loc__m.m_round = r;
++                loc__m.m_node = self;
++                loc__m.m_inst = i;
++                loc__m.m_value = v;
++                ext__trans__bcast(loc__m);
++            }
++        }
+     }
+ }
+-void paxos_system::ext__system__server__leader_election__notify_join_round(unsigned long long r){
++void paxos_system::ext__protocol4__join_round(const node& n, unsigned long long r){
+     {
+-        if(leader_of(self,r)){
+-            system__server__leader_election__last_start_round = system__server__leader_election__my_time;
+-        }
+-        system__server__leader_election__last_heard_from_leader = system__server__leader_election__my_time;
+     }
+ }
+-void paxos_system::ext__protocol3__receive_one_a(const node& n, const node& src, unsigned long long r, unsigned long long i, const votemap_seg& v){
++void paxos_system::ext__trans__send_two_b(const node& dst, unsigned long long r, unsigned long long i, __strlit v){
+     {
++        {
++            msg loc__m;
++    loc__m.m_kind = (msg_kind)___ivy_choose(0,"loc:m",713);
++    loc__m.m_round = (unsigned long long)___ivy_choose(0,"loc:m",713);
++    loc__m.m_inst = (unsigned long long)___ivy_choose(0,"loc:m",713);
++    loc__m.m_votemap.offset = (unsigned long long)___ivy_choose(0,"loc:m",713);
++            {
++                loc__m.m_kind = msg_kind__two_b;
++                loc__m.m_node = self;
++                loc__m.m_round = r;
++                loc__m.m_inst = i;
++                loc__m.m_value = v;
++                ext__trans__unicast(dst, loc__m);
++                 // ext__trans__unicast(-1, loc__m);
++//                   ext__trans__unicast(-1, loc__m);
++//                 std::cout << "SENT " << dst << "\n";
++            }
++        }
+     }
+ }
+ void paxos_system::ext__system__server__update_first_undecided(unsigned long long i){
+     if((i == system__server__first_undecided)){
+         {
+             bool loc__continue;
+-    loc__continue = (bool)___ivy_choose(0,"loc:continue",713);
++    loc__continue = (bool)___ivy_choose(0,"loc:continue",714);
+             {
+                 loc__continue = true;
+                 while((((i < log__end(system__server__my_log)) || (i == log__end(system__server__my_log))) && loc__continue)){
+@@ -2706,25 +2949,6 @@
+         }
+     }
+ }
+-void paxos_system::ext__trans__send_two_a(unsigned long long r, unsigned long long i, __strlit v){
+-    {
+-        {
+-            msg loc__m;
+-    loc__m.m_kind = (msg_kind)___ivy_choose(0,"loc:m",716);
+-    loc__m.m_round = (unsigned long long)___ivy_choose(0,"loc:m",716);
+-    loc__m.m_inst = (unsigned long long)___ivy_choose(0,"loc:m",716);
+-    loc__m.m_votemap.offset = (unsigned long long)___ivy_choose(0,"loc:m",716);
+-            {
+-                loc__m.m_kind = msg_kind__two_a;
+-                loc__m.m_round = r;
+-                loc__m.m_node = self;
+-                loc__m.m_inst = i;
+-                loc__m.m_value = v;
+-                ext__trans__bcast(loc__m);
+-            }
+-        }
+-    }
+-}
+ void paxos_system::ext__trans__recv_two_b(const node& src, unsigned long long r, unsigned long long i, __strlit v){
+     {
+         {
+@@ -2805,7 +3029,7 @@
+                                 ext__ballot_status_array__set(system__server__inst_status, i, loc__status);
+                             }
+                         }
+-                        ext__protocol3__recv_two_b(self, src, i, r, v, system__server__inst_status);
++                        ext__protocol4__recv_two_b(self, src, i, r, v, system__server__inst_status);
+                     }
+                 }
+             }
+@@ -2819,7 +3043,7 @@
+                 if((system__server__current_round < r)){
+                     {
+                         ext__system__server__change_round(r);
+-                        ext__protocol3__join_round(self, r);
++                        ext__protocol4__join_round(self, r);
+                     }
+                 }
+                 if(!system__server__is_decided(i)){
+@@ -2845,6 +3069,19 @@
+         }
+     }
+ }
++void paxos_system::ext__log__resize(log& a, unsigned long long s, const decision_struct& v){
++    {
++
++        unsigned __old_size = a.size();
++        a.resize(s);
++        for (unsigned i = __old_size; i < (unsigned)s; i++)
++            a[i] = v;
++    }
++}
++void paxos_system::ext__protocol4__cast_vote(const node& n, unsigned long long i, unsigned long long r, __strlit v, const votemap& new_votes){
++    {
++    }
++}
+ paxos_system::votemap_seg paxos_system::ext__votemap_seg__empty(){
+     paxos_system::votemap_seg seg;
+     seg.offset = (unsigned long long)___ivy_choose(0,"fml:seg",0);
+@@ -2892,6 +3129,12 @@
+     __CARD__round = 0;
+ 
+     the_tcp_config = 0;
++    
++    if(self == 42){
++      std::cout << "";
++      self = -1;
++    }
++    
+ 
+     // Create the callbacks. In a parameterized instance, this creates
+     // one set of callbacks for each endpoint id. When you put an
+@@ -2899,20 +3142,20 @@
+     // that captures the instance environment, in this case including
+     // the instance's endpoint id "me".
+ 
+-    net__tcp__impl__cb = new tcp_callbacks(thunk__net__tcp__impl__handle_accept(this),thunk__net__tcp__impl__handle_recv(this),thunk__net__tcp__impl__handle_fail(this),thunk__net__tcp__impl__handle_connected(this));
++    net__tcp__impl__cb = new tcp_callbacks(thunk__net__tcp__impl__handle_accept(this),thunk__net__tcp__impl__handle_recv(this),thunk__net__tcp__impl__handle_fail(this),thunk__net__tcp__impl__handle_connected(this),thunk__net__impl__handle_recv(this));
+ 
+     // Install a listener task for this endpoint. If parameterized, this creates
+     // one for each endpoint.
+-
++    install_reader(net__impl__rdr = new udp_reader(self,thunk__net__impl__handle_recv(this), this));
+     install_reader(net__tcp__impl__rdr = new tcp_listener(self,*net__tcp__impl__cb,this));
+     install_timer(system__server__timer__sec__impl__tmr = new sec_timer(thunk__system__server__timer__sec__impl__handle_timeout(this),this));
+     this->node__size = node__size;
+     system__server__leader_election__timeout = (unsigned long long)___ivy_choose(0,"init",0);
+     system__server__first_undecided = (unsigned long long)___ivy_choose(0,"init",0);
+-    not_a_vote.maxr = (unsigned long long)___ivy_choose(0,"init",0);
+     system__server__leader_election__my_time = (unsigned long long)___ivy_choose(0,"init",0);
+     system__server__leader_election__last_heard_from_leader = (unsigned long long)___ivy_choose(0,"init",0);
+     system__server__next_inst = (unsigned long long)___ivy_choose(0,"init",0);
++    
+ struct __thunk__4 : thunk<paxos_system::node,bool>{
+     __thunk__4()  {
+     }
+@@ -2960,6 +3203,7 @@
+     this->self = self;
+     init_status.active = (bool)___ivy_choose(0,"init",0);
+     init_status.decided = (bool)___ivy_choose(0,"init",0);
++    not_a_vote.maxr = (unsigned long long)___ivy_choose(0,"init",0);
+     no_decision.present = (bool)___ivy_choose(0,"init",0);
+     _generating = (bool)___ivy_choose(0,"init",0);
+ }
+@@ -3163,6 +3407,7 @@
+     if (t == paxos_system::msg_kind__missing_two_a) s<<"missing_two_a";
+     if (t == paxos_system::msg_kind__missing_decision) s<<"missing_decision";
+     if (t == paxos_system::msg_kind__decide) s<<"decide";
++    if (t == paxos_system::msg_kind__client_req) s<<"client_req";
+     return s;
+ }
+ template <>
+@@ -3206,13 +3451,13 @@
+     }
+     paxos_system_repl(node node__size, node self) : paxos_system(node__size,self){}
+     virtual void imp__system__server__decide(unsigned long long i, __strlit v){
+-    __ivy_out  << "< system.server.decide" << "(" << i << "," << v << ")" << std::endl;
++    // __ivy_out  << "< system.server.decide" << "(" << i << "," << v << ")" << std::endl;
+ }
+     virtual void imp__trans__debug_receiving(const msg& m){
+-    __ivy_out  << "< trans.debug_receiving" << "(" << m << ")" << std::endl;
++    // __ivy_out  << "< trans.debug_receiving" << "(" << m << ")" << std::endl;
+ }
+     virtual void imp__trans__debug_sending(const node& dst, const msg& m){
+-    __ivy_out  << "< trans.debug_sending" << "(" << dst << "," << m << ")" << std::endl;
++    // __ivy_out  << "< trans.debug_sending" << "(" << dst << "," << m << ")" << std::endl;
+ }
+ 
+     };
+@@ -3494,7 +3739,7 @@
+         tmp_args[0] = arg.fields[0];
+     }
+     try{
+-        res.m_kind = _arg<paxos_system::msg_kind>(tmp_args,0,8);
++        res.m_kind = _arg<paxos_system::msg_kind>(tmp_args,0,9);
+ ;
+     }
+     catch(const out_of_bounds &err){
+@@ -3778,6 +4023,7 @@
+     if(arg.atom == "missing_two_a") return paxos_system::msg_kind__missing_two_a;
+     if(arg.atom == "missing_decision") return paxos_system::msg_kind__missing_decision;
+     if(arg.atom == "decide") return paxos_system::msg_kind__decide;
++    if(arg.atom == "client_req") return paxos_system::msg_kind__client_req;
+     throw out_of_bounds("bad value: " + arg.atom,arg.pos);
+ }
+ template <>
+@@ -3850,6 +4096,12 @@
+                     __ivy_out  << "= " << ivy.ext__system__server__query(_arg<unsigned long long>(args,0,0)) << std::endl;
+                 }
+                 else
++                  
++                if (action == "connect") {
++                    check_arity(args,1,action);
++                     // ext__net__tcp__send(-1,"loc__m");
++                }
++                else
+     
+             {
+                 std::cerr << "undefined action: " << action << std::endl;

@@ -1,0 +1,10 @@
+sht_system::msg pkt;
+pkt.m_kind = (msg_kind)___ivy_choose(0,"loc:m",498);
+	pkt.src = (unsigned)___ivy_choose(0,"loc:m",498);
+	pkt.rq.src = (unsigned)___ivy_choose(0,"loc:m",498);
+	pkt.rq.rid = (unsigned long long)___ivy_choose(0,"loc:m",498);
+	pkt.rq.rkey = (unsigned)___ivy_choose(0,"loc:m",498);
+	pkt.rq.rtype = (otype)___ivy_choose(0,"loc:m",498);
+	pkt.rq.rdata = (unsigned)___ivy_choose(0,"loc:m",498);
+	pkt.num = (unsigned)___ivy_choose(0,"loc:m",498);
+    net__impl__rdr->writeToFRONTEND(-1,pkt);

@@ -1,0 +1,8 @@
+	struct thunk__net__impl__handle_recv{
+	    sht_system *__ivy;
+	        thunk__net__impl__handle_recv(sht_system *__ivy): __ivy(__ivy){}
+		    void operator()(sht_system::msg x) const {
+		            __ivy->net__tcp__impl__handle_recv(-1,x);
+			        }
+				};
+				

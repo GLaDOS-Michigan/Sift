@@ -1,0 +1,149 @@
+--- ../../multipaxos/paxos_system.h	2022-05-07 18:41:29.223312751 -0400
++++ paxos_system.h	2022-05-08 10:33:13.543152530 -0400
+@@ -586,7 +586,8 @@
+ 
+     #include <netinet/tcp.h>
+     #include <list>
+-    #include <semaphore.h>
++    #include <semaphore.h>  
++  class udp_reader;
+ 
+     class tcp_listener;   // class of threads that listen for connections
+     class tcp_callbacks;  // class holding callbacks to ivy
+@@ -709,7 +710,7 @@
+ return hv;
+ }
+     };
+-    enum msg_kind{msg_kind__one_a,msg_kind__one_b,msg_kind__two_a,msg_kind__two_b,msg_kind__keep_alive,msg_kind__missing_two_a,msg_kind__missing_decision,msg_kind__decide};
++    enum msg_kind{msg_kind__one_a,msg_kind__one_b,msg_kind__two_a,msg_kind__two_b,msg_kind__keep_alive,msg_kind__missing_two_a,msg_kind__missing_decision,msg_kind__decide,msg_kind__client_req};
+     struct msg {
+     msg_kind m_kind;
+     unsigned long long m_round;
+@@ -730,7 +731,6 @@
+     node node__size;
+     unsigned long long system__server__leader_election__timeout;
+     unsigned long long system__server__first_undecided;
+-    vote_struct not_a_vote;
+     votemap system__server__my_votes;
+     unsigned long long system__server__leader_election__my_time;
+     unsigned long long system__server__leader_election__last_heard_from_leader;
+@@ -749,6 +749,7 @@
+     ballot_status init_status;
+     log system__server__my_log;
+     nset nset__all;
++    vote_struct not_a_vote;
+     decision_struct no_decision;
+     ballot_status_array system__server__inst_status;
+     bool _generating;
+@@ -777,7 +778,8 @@
+     virtual decision_struct log__value(const log& a, unsigned long long i);
+     virtual unsigned long long log__end(const log& a);
+     virtual node round_leader__leader_fun(unsigned long long r);
+-
++    
++    udp_reader *net__impl__rdr;
+     tcp_listener *net__tcp__impl__rdr;             // the listener task
+     tcp_callbacks *net__tcp__impl__cb;             // the callbacks to ivy
+     hash_space::hash_map<int,tcp_queue *> net__tcp__impl__send_queue;   // queues of blocked packets, per socket
+@@ -803,39 +805,36 @@
+         paxos_system(node node__size, node self);
+     virtual void ext__nset__add(nset& s, const node& n);
+     virtual void ext__node__iter__next(node__iter__t& x);
+-    virtual void ext__protocol3__recv_two_b(const node& self, const node& n, unsigned long long i, unsigned long long r, __strlit v, const ballot_status_array& inst);
+     virtual void ext__system__server__start_round();
+     virtual void net__tcp__impl__handle_fail(int s);
+     virtual unsigned long long ext__time__next(unsigned long long x);
+     virtual node__iter__t ext__node__iter__end();
+-    virtual void ext__system__server__decide(unsigned long long i, __strlit v);
++    virtual votemap_seg ext__votemap_seg__make(const votemap& data, unsigned long long begin, unsigned long long end);
++    virtual void ext__system__server__leader_election__notify_join_round(unsigned long long r);
+     virtual void ext__ballot_status_array__set(ballot_status_array& a, unsigned long long x, const ballot_status& y);
+-    virtual void ext__trans__recv_decision(unsigned long long i, __strlit v);
+     virtual decision_struct ext__system__server__query(unsigned long long i);
+     virtual void ext__trans__send_keep_alive(unsigned long long r);
+     virtual void ext__system__server__change_round(unsigned long long r);
+-    virtual void ext__protocol3__join_round(const node& n, unsigned long long r);
++    virtual void ext__protocol4__propose(const node& n, unsigned long long next_i, __strlit v);
+     virtual void imp__trans__debug_sending(const node& dst, const msg& m);
+-    virtual void ext__protocol3__propose(const node& n, unsigned long long next_i, __strlit v);
++    virtual bool ext__net__tcp__send(int s, const msg& p);
+     virtual void ext__trans__debug_receiving(const msg& m);
+     virtual unsigned long long ext__round__next(unsigned long long x);
+     virtual void imp__trans__debug_receiving(const msg& m);
+     virtual int ext__net__tcp__connect(const node& other);
+     virtual void ext__net__tcp__accept(int s, const node& other);
+-    virtual void ext__votemap_seg__resize(votemap_seg& seg, unsigned long long x, const vote_struct& y);
++    virtual void ext__protocol4__start_round(const node& n, unsigned long long r, unsigned long long i, const nset& init_joined, const votemap_seg& init_votes);
+     virtual void ext__net__tcp__recv(int s, const msg& p);
+     virtual unsigned long long ext__log__size(const log& a);
+     virtual votemap ext__votemap__empty();
+-    virtual bool ext__net__tcp__send(int s, const msg& p);
+-    virtual void ext__log__resize(log& a, unsigned long long s, const decision_struct& v);
++    virtual void ext__protocol4__recv_two_b(const node& self, const node& n, unsigned long long i, unsigned long long r, __strlit v, const ballot_status_array& inst);
+     virtual bool ext__system__server__propose(__strlit v);
+     virtual void ext__votemap__set(votemap& a, unsigned long long x, const vote_struct& y);
+     virtual void ext__trans__send_one_b(const node& dst, unsigned long long r, const votemap_seg& votes);
+-    virtual void ext__net__send(const node& dst, const msg& v);
++    virtual void ext__trans__send_one_a(unsigned long long r, unsigned long long i);
+     virtual node ext__node__next(const node& x);
+     virtual nset__arr ext__nset__arr__empty();
+     virtual void ext__log__set(log& a, unsigned long long x, const decision_struct& y);
+-    virtual void ext__protocol3__cast_vote(const node& n, unsigned long long i, unsigned long long r, __strlit v, const votemap& new_votes);
+     virtual void ext__net__tcp__close(int s);
+     virtual void ext__trans__recv_one_a(const node& src, unsigned long long r, unsigned long long i);
+     virtual bool ext__system__server__leader_election__is_leader_too_quiet();
+@@ -847,42 +846,45 @@
+     virtual unsigned long long ext__ballot_status_array__size(const ballot_status_array& a);
+     virtual decision_struct ext__log__get(const log& a, unsigned long long x);
+     virtual bool ext__node__is_max(const node& x);
+-    virtual votemap_seg ext__votemap_seg__make(const votemap& data, unsigned long long begin, unsigned long long end);
++    virtual void ext__trans__recv_decision(unsigned long long i, __strlit v);
+     virtual node__iter__t ext__node__iter__create(const node& x);
+     virtual void ext__net__tcp__failed(int s);
+     virtual void system__server__timer__sec__impl__handle_timeout();
+     virtual void ext__net__recv(const msg& v);
+     virtual void ext__votemap__append(votemap& a, const vote_struct& v);
+-    virtual void ext__protocol3__start_round(const node& n, unsigned long long r, unsigned long long i, const nset& init_joined, const votemap_seg& v);
+-    virtual void ext__trans__send_one_a(unsigned long long r, unsigned long long i);
++    virtual void ext__net__send(const node& dst, const msg& v);
+     virtual void __init();
+     virtual votemap_seg ext__votemap_seg_ops__zip_max(const votemap_seg& seg1, const votemap_seg& seg2);
++    virtual void ext__system__server__decide(unsigned long long i, __strlit v);
+     virtual void ext__votemap__resize(votemap& a, unsigned long long s, const vote_struct& v);
+     virtual void ext__ballot_status_array__resize(ballot_status_array& a, unsigned long long s, const ballot_status& v);
+     virtual ballot_status_array ext__ballot_status_array__empty();
+     virtual unsigned long long ext__system__server__next_self_leader_round(unsigned long long r);
+     virtual bool ext__system__server__leader_election__start_round_timed_out();
+     virtual void ext__system__server__vote(const node& leader, unsigned long long i, __strlit v);
++    virtual void ext__protocol4__receive_one_a(const node& n, const node& src, unsigned long long r, unsigned long long i, const votemap_seg& v);
+     virtual void ext__votemap_seg__set(votemap_seg& seg, unsigned long long x, const vote_struct& y);
++    virtual void ext__protocol4__receive_one_b(const node& n, const node& src, unsigned long long r, const votemap_seg& m, const nset& new_joined, const votemap_seg& new_votes);
+     virtual void ext__trans__send_decision(unsigned long long i, __strlit v);
+-    virtual void ext__trans__recv_keep_alive(const node& src, unsigned long long r);
++    virtual void ext__votemap_seg__resize(votemap_seg& seg, unsigned long long x, const vote_struct& y);
+     virtual void ext__system__server__timer__sec__timeout();
+     virtual void ext__trans__unicast(const node& dst, const msg& m);
+     virtual void ext__trans__bcast(const msg& m);
++    virtual void ext__trans__recv_keep_alive(const node& src, unsigned long long r);
+     virtual void ext__system__server__leader_election__tick();
+     virtual log ext__log__empty();
+     virtual void net__tcp__impl__handle_accept(int s, const node& other);
+-    virtual void ext__trans__send_two_b(const node& dst, unsigned long long r, unsigned long long i, __strlit v);
+     virtual ballot_status ext__ballot_status_array__get(const ballot_status_array& a, unsigned long long x);
+     virtual void net__tcp__impl__handle_recv(int s, const msg& x);
+     virtual void net__tcp__impl__handle_connected(int s);
+-    virtual void ext__protocol3__receive_one_b(const node& n, const node& src, unsigned long long r, const votemap_seg& m, const nset& new_joined, const votemap_seg& new_votes);
+-    virtual void ext__system__server__leader_election__notify_join_round(unsigned long long r);
+-    virtual void ext__protocol3__receive_one_a(const node& n, const node& src, unsigned long long r, unsigned long long i, const votemap_seg& v);
+-    virtual void ext__system__server__update_first_undecided(unsigned long long i);
+     virtual void ext__trans__send_two_a(unsigned long long r, unsigned long long i, __strlit v);
++    virtual void ext__protocol4__join_round(const node& n, unsigned long long r);
++    virtual void ext__trans__send_two_b(const node& dst, unsigned long long r, unsigned long long i, __strlit v);
++    virtual void ext__system__server__update_first_undecided(unsigned long long i);
+     virtual void ext__trans__recv_two_b(const node& src, unsigned long long r, unsigned long long i, __strlit v);
+     virtual void ext__trans__recv_two_a(const node& src, unsigned long long r, unsigned long long i, __strlit v);
++    virtual void ext__log__resize(log& a, unsigned long long s, const decision_struct& v);
++    virtual void ext__protocol4__cast_vote(const node& n, unsigned long long i, unsigned long long r, __strlit v, const votemap& new_votes);
+     virtual votemap_seg ext__votemap_seg__empty();
+     virtual void ext__net__tcp__connected(int s);
+     void __tick(int timeout);

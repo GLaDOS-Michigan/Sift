@@ -1,0 +1,41 @@
+--- ../../sht/sht_system.h	2022-05-07 11:48:52.664874436 -0400
++++ sht_system.h	2022-05-07 09:47:38.618635433 -0400
+@@ -586,8 +586,9 @@
+ 
+     #include <netinet/tcp.h>
+     #include <list>
+-    #include <semaphore.h>
+-
++    #include <semaphore.h>	
++class udp_reader;
++		
+     class tcp_listener;   // class of threads that listen for connections
+     class tcp_callbacks;  // class holding callbacks to ivy
+ 
+@@ -666,7 +667,7 @@
+ return hv;
+ }
+     };
+-    enum msg_kind{msg_kind__request_t,msg_kind__reply_t,msg_kind__delegate_t,msg_kind__ack_t};
++    enum msg_kind{msg_kind__request_t,msg_kind__reply_t,msg_kind__delegate_t,msg_kind__ack_t,msg_kind__server_req_t};
+     struct msg {
+     msg_kind m_kind;
+     unsigned src;
+@@ -701,7 +702,8 @@
+     tcp_callbacks *net__tcp__impl__cb;             // the callbacks to ivy
+     hash_space::hash_map<int,tcp_queue *> net__tcp__impl__send_queue;   // queues of blocked packets, per socket
+ 
+-
++    udp_reader *net__impl__rdr;
++		
+     tcp_config *the_tcp_config;  // the current configurations
+ 
+     // Get the current TCP configuration. If none, create a default one.
+@@ -762,6 +764,7 @@
+     virtual void ext__trans__send_reply(unsigned dst, const req& rq);
+     virtual void net__tcp__impl__handle_connected(int s);
+     virtual void ext__net__tcp__connected(int s);
++    virtual void ext__trans__handle_serverRequest(const req& rq);
+     void __tick(int timeout);
+ };
+ inline bool operator ==(const sht_system::seqnum__iter__t &s, const sht_system::seqnum__iter__t &t){

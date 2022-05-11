@@ -1,0 +1,14 @@
+void sht_system::ext__trans__handle_serverRequest(const req& rq){
+    {
+        if((rq.rtype == write)){
+            {
+                ext__system__server__set(rq.rkey, rq.rdata);
+            }
+        }
+        else {
+            {
+                ext__system__server__get(rq.rkey);
+            }
+        }
+    }
+}

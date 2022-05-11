@@ -1,0 +1,85 @@
+void sht_system::ext__net__recv(const msg& v){
+    {
+			// std::cout << "got msg = "<< v << "\n";
+        {
+            unsigned loc__seq;
+    loc__seq = (unsigned)___ivy_choose(0,"loc:seq",484);
+            {
+                loc__seq = v.num;
+                {
+                    unsigned loc__src;
+    loc__src = (unsigned)___ivy_choose(0,"loc:src",483);
+                    {
+                        loc__src = v.src;
+                        if((v.m_kind == msg_kind__server_req_t)){
+                            {
+															// std::cout << "got msg = "<< v << "\n";
+															ext__trans__handle_serverRequest(v.rq);
+                            }
+                        }
+                        if((((loc__seq < trans__recv_seq[loc__src]) || (loc__seq == trans__recv_seq[loc__src])) && !(v.m_kind == msg_kind__ack_t))){
+                            {
+                                {
+                                    msg loc__ack;
+    loc__ack.m_kind = (msg_kind)___ivy_choose(0,"loc:ack",482);
+    loc__ack.src = (unsigned)___ivy_choose(0,"loc:ack",482);
+    loc__ack.rq.src = (unsigned)___ivy_choose(0,"loc:ack",482);
+    loc__ack.rq.rid = (unsigned long long)___ivy_choose(0,"loc:ack",482);
+    loc__ack.rq.rkey = (unsigned)___ivy_choose(0,"loc:ack",482);
+    loc__ack.rq.rtype = (otype)___ivy_choose(0,"loc:ack",482);
+    loc__ack.rq.rdata = (unsigned)___ivy_choose(0,"loc:ack",482);
+    loc__ack.num = (unsigned)___ivy_choose(0,"loc:ack",482);
+                                    {
+                                        loc__ack.m_kind = msg_kind__ack_t;
+                                        loc__ack.src = me;
+                                        loc__ack.num = loc__seq;
+                                        ext__net__send(loc__src, loc__ack);
+                                    }
+                                }
+                            }
+                        }
+                        if((v.m_kind == msg_kind__ack_t)){
+                            {
+                                ext__trans__mq__delete_all(loc__src, loc__seq);
+                            }
+                        }
+                        else {
+                            if((loc__seq == trans__recv_seq[loc__src])){
+                                {
+                                    trans__recv_seq[loc__src] = ext__seqnum__next(trans__recv_seq[loc__src]);
+                                    if((v.m_kind == msg_kind__request_t)){
+                                        {
+                                            ext__trans__handle_request(v.rq);
+                                        }
+                                    }
+                                    else {
+                                        if((v.m_kind == msg_kind__reply_t)){
+                                            {
+                                                ext__trans__handle_reply(v.rq);
+                                            }
+                                        }
+                                        else {
+                                            if((v.m_kind == msg_kind__delegate_t)){
+                                                {
+                                                    ext__trans__handle_delegate(v.rq.rkey, v.rq.rdata);
+                                                }
+                                            }else{
+											                        if((v.m_kind == msg_kind__server_req_t)){
+											                            {
+																										// std::cout << "got msg = "<< v << "\n";
+																										ext__trans__handle_serverRequest(v.rq);
+											                            }
+											                        }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                     
+                    }
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,475 @@
+--- ../../sht/sht_system.cpp	2022-05-07 11:48:52.664874436 -0400
++++ sht_system_.cpp	2022-05-07 11:33:23.638892883 -0400
+@@ -29,6 +29,10 @@
+ #else
+ #include <cstdint>
+ #endif
++#include<unistd.h>
++
++#include "config.h"
++
+ typedef sht_system ivy_class;
+ std::ofstream __ivy_out;
+ std::ofstream __ivy_modelfile;
+@@ -199,6 +203,15 @@
+     }
+ };
+ 
++struct thunk__net__impl__handle_recv{
++    sht_system *__ivy;
++    thunk__net__impl__handle_recv(sht_system *__ivy): __ivy(__ivy){}
++    void operator()(sht_system::msg x) const {
++        __ivy->net__tcp__impl__handle_recv(-1,x);
++    }
++};
++
++
+ /*++
+ Copyright (c) Microsoft Corporation
+ 
+@@ -767,7 +780,7 @@
+ #else
+             inetaddr = INADDR_ANY;
+ #endif
+-            inetport = 5990+ id;
++            inetport = 4990+ id;
+     }
+ 
+     // This reverses the default configuration's map. Note, this is a little dangerous
+@@ -775,7 +788,7 @@
+     // no way to know the correct range of endpoint ids.
+ 
+     int tcp_config::rev(unsigned long inetaddr, unsigned long inetport) {
+-        return inetport - 5990; // don't use this for real, it's vulnerable
++        return inetport - 4990; // don't use this for real, it's vulnerable
+     }
+ 
+     // construct a sockaddr_in for a specified process id using the configuration
+@@ -786,7 +799,8 @@
+         unsigned long inetport;
+         ivy->get_tcp_config() -> get(my_id,inetaddr,inetport);
+         myaddr.sin_family = AF_INET;
+-        myaddr.sin_addr.s_addr = htonl(inetaddr);
++        // myaddr.sin_addr.s_addr = htonl(inetaddr);
++        myaddr.sin_addr.s_addr = inet_addr(server_map.at(my_id)); // added to read from config.h
+         myaddr.sin_port = htons(inetport);
+     }
+ 
+@@ -817,13 +831,162 @@
+         thunk__net__tcp__impl__handle_recv rcb;
+         thunk__net__tcp__impl__handle_fail fcb;
+         thunk__net__tcp__impl__handle_connected ccb;
++        thunk__net__impl__handle_recv rccb;
+         tcp_callbacks(const thunk__net__tcp__impl__handle_accept &acb,
+                       const thunk__net__tcp__impl__handle_recv &rcb,
+                       const thunk__net__tcp__impl__handle_fail &fcb,
+-                      const thunk__net__tcp__impl__handle_connected ccb)
+-            : acb(acb), rcb(rcb), fcb(fcb), ccb(ccb) {}
++                      const thunk__net__tcp__impl__handle_connected ccb,
++											const thunk__net__impl__handle_recv rccb)
++            : acb(acb), rcb(rcb), fcb(fcb), ccb(ccb), rccb(rccb) {}
+     };
+ 
++
++  	class udp_reader : public reader {
++  	    int sock;
++  	    int my_id;
++  	    thunk__net__impl__handle_recv rcb;
++  	    ivy_class *ivy;
++        // udp_config *conf;
++  	    bool bound;
++  	  public:
++  	    udp_reader(int _my_id, thunk__net__impl__handle_recv rcb, ivy_class *ivy)
++  	        : my_id(_my_id), rcb(rcb), ivy(ivy), bound(false) {
++  		sock = socket(AF_INET, SOCK_DGRAM, 0);
++  		if (sock < 0)
++  		    { std::cerr << "cannot create socket\n"; exit(1); }
++
++              }
++              void bind_int() {
++                  if (!bound) {
++                      struct sockaddr_in myaddr;
++                      get_addr_dyno(my_id,myaddr,-1);
++                     std::cout << "********binding id: " << my_id << " port: " << ntohs(myaddr.sin_port) << std::endl;
++                      if (::bind(sock, (struct sockaddr *)&myaddr, sizeof(myaddr)) < 0)
++                          { std::cerr << "bind failed\n"; exit(1); }
++                  }
++                  bound = true;
++              }
++                    
++  	    virtual void bind() {
++  	        ivy -> __lock();  // can be asynchronous, so must lock ivy!
++                  bind_int();
++  	        ivy -> __unlock();
++  	    }
++  	    virtual ~udp_reader() {
++  #ifdef _WIN32
++                  closesocket(sock);
++  #else
++  	        close(sock);
++  #endif
++  	    }
++  	    virtual void get_addr(int my_id, sockaddr_in &myaddr) {
++  		memset((char *)&myaddr, 0, sizeof(myaddr));
++  		unsigned long inetaddr;
++  		unsigned long inetport;
++  	        // if (!conf) {
++//                 conf = ivy -> get_udp_config();
++//                   }
++      // conf -> get(my_id,inetaddr,inetport);
++  		myaddr.sin_family = AF_INET;
++  		myaddr.sin_addr.s_addr = htonl(inetaddr);
++  		myaddr.sin_port = htons(5990+42);
++  	    }
++
++  	    virtual int fdes() {
++  		return sock;
++  	    }
++      
++      
++  	    virtual void get_addr_dyno(int my_id, sockaddr_in &myaddr, int val) {
++  		memset((char *)&myaddr, 0, sizeof(myaddr));
++  		unsigned long inetaddr;
++  		unsigned long inetport;
++  		myaddr.sin_family = AF_INET;
++  		myaddr.sin_addr.s_addr = htonl(inetaddr);
++      if(my_id == -1){
++        myaddr.sin_port = htons(4942 + 0); // random port for server frontend (could be anything)
++      }else{
++        myaddr.sin_port = htons(4990+ my_id);
++      }
++    
++      char *addr = server_map.at(my_id);
++      if (inet_aton(addr, &myaddr.sin_addr)==0) {
++              fprintf(stderr, "inet_aton() failed\n");
++              exit(1);
++            }
++
++  	    }
++      
++      
++  	    virtual void read() {
++  	        int len=0;
++                  socklen_t lenlen=4;
++  #ifdef _WIN32
++  	        if (getsockopt(sock,SOL_SOCKET,SO_RCVBUF,(char *)&len,&lenlen))
++  #else
++  	        if (getsockopt(sock,SOL_SOCKET,SO_RCVBUF,&len,&lenlen))
++  #endif
++  	            { perror("getsockopt failed"); exit(1); }
++  	        std::vector<char> buf(len);
++  	        int bytes;
++  		if ((bytes = recvfrom(sock,&buf[0],len,0,0,0)) < 0)
++  		    { std::cerr << "recvfrom failed\n"; exit(1); }
++  	        buf.resize(bytes);
++  	        sht_system::msg pkt;
++  	        try {
++  		    ivy_binary_deser ds(buf);
++  		    __deser(ds,pkt);
++          buf.clear(); 
++  	            if (ds.pos < buf.size())
++  	                throw deser_err();
++                  } catch (deser_err &){
++  		    std::cout << "BAD PACKET RECEIVED " << sock << "\n";
++  		    return;
++  		}
++  		ivy->__lock();
++  		rcb(pkt);
++  		ivy->__unlock();
++  	    }
++  	    virtual void write(int dst, sht_system::msg pkt) {
++  	        bind_int();
++  		struct sockaddr_in dstaddr;
++  		get_addr_dyno(dst,dstaddr,-1);
++  		ivy_binary_ser sr;
++  	        __ser(sr,pkt);
++  		//std::cout << "SENDING\n";
++  		if (sendto(sock,&sr.res[0],sr.res.size(),0,(sockaddr *)&dstaddr,sizeof(sockaddr_in)) < 0) 
++  #ifdef _WIN32
++  		     { std::cerr << "sendto failed " << WSAGetLastError() << "\n"; exit(1); }
++  #else
++  		     { std::cerr << "sendto failed\n"; exit(1); }
++  #endif
++      
++  	    }
++      
++      
++      
++  	    virtual void writeToFRONTEND(int dst, sht_system::msg pkt) {
++  	        bind_int();          
++  		struct sockaddr_in dstaddr;
++  		ivy_binary_ser sr;
++  	        __ser(sr,pkt);
++
++                      struct sockaddr_in serveraddr;											
++                      get_addr_dyno(-1,serveraddr,0);
++                         if (sendto(sock,&sr.res[0],sr.res.size(),0,(sockaddr *)&serveraddr,sizeof(sockaddr_in)) < 0)
++                     #ifdef _WIN32
++                              { std::cerr << "sendto failed " << WSAGetLastError() << "\n"; exit(1); }
++                     #else
++                              { std::cerr << "sendto failed\n"; exit(1); }
++                     #endif
++                  
++           }
++      
++        // }
++      
++      
++  	};
++		
+     // This is a general class for an asynchronous task. These objects are called in a loop
+     // by a thread allocated by the runtime. The fdes method returns a file descriptor
+     // associated with the object. If fdes returns a negative value, the thread deletes the
+@@ -950,7 +1113,6 @@
+ 
+             int bytes = send(sock,&buf[0],buf.size(),MSG_NOSIGNAL);
+         
+-            // std::cout << "SENT\n";
+ 
+             // if not all bytes sent, channel has failed, close the queue
+ 
+@@ -962,7 +1124,6 @@
+ 
+             // Get the address of the other from the configuration
+ 
+-            // std::cout << "ENTERING CONNECT " << sock << std::endl;
+ 
+             ivy -> __lock();               // can be asynchronous, so must lock ivy!
+             struct sockaddr_in myaddr;
+@@ -972,7 +1133,6 @@
+ 
+             // Call connect to make connection
+ 
+-            // std::cout << "CONNECTING sock=" << sock << "other=" << other << std::endl;
+ 
+             int res = ::connect(sock,(sockaddr *)&myaddr,sizeof(myaddr));
+ 
+@@ -980,13 +1140,11 @@
+             
+             ivy->__lock();
+             if (res >= 0) {
+-                // std::cout << "CONNECT SUCCEEDED " << sock << std::endl;
+-                cb.ccb(sock);
++							cb.ccb(sock);
+                 connected = true;
+             }
+             else {
+-                // std::cout << "CONNECT FAILED " << sock << std::endl;
+-                fail_close();
++							fail_close();
+             }
+             ivy->__unlock();
+ 
+@@ -1049,8 +1207,6 @@
+         // the the tcp interface specification.
+ 
+         virtual void read() {
+-            // std::cout << "ACCEPTING\n";
+-
+             // Call accept to get an incoming connection request. May block.
+             sockaddr_in other_addr;
+             socklen_t addrlen = sizeof(other_addr);    
+@@ -1103,6 +1259,7 @@
+ void sht_system::ext__trans__handle_request(const req& rq){
+     {
+         {
++					// std::cout << "got request " << rq << " \n";
+             unsigned loc__0;
+     loc__0 = (unsigned)___ivy_choose(0,"loc:0",477);
+             {
+@@ -1260,6 +1417,11 @@
+     loc__src = (unsigned)___ivy_choose(0,"loc:src",483);
+                     {
+                         loc__src = v.src;
++                        if((v.m_kind == msg_kind__server_req_t)){
++                            {
++															ext__trans__handle_serverRequest(v.rq);
++                            }
++                        }
+                         if((((loc__seq < trans__recv_seq[loc__src]) || (loc__seq == trans__recv_seq[loc__src])) && !(v.m_kind == msg_kind__ack_t))){
+                             {
+                                 {
+@@ -1306,12 +1468,19 @@
+                                                 {
+                                                     ext__trans__handle_delegate(v.rq.rkey, v.rq.rdata);
+                                                 }
++                                            }else{
++											                        if((v.m_kind == msg_kind__server_req_t)){
++											                            {
++																										ext__trans__handle_serverRequest(v.rq);
++											                            }
++											                        }
+                                             }
+                                         }
+                                     }
+                                 }
+                             }
+                         }
++                     
+                     }
+                 }
+             }
+@@ -1321,6 +1490,23 @@
+ void sht_system::ext__system__server__delegate_(unsigned dst, unsigned k){
+     {
+         {
++					if(dst == 42){
++						std::cout << "me ==" << me << "\n";
++						if(me == 0){
++							for(int i = 333; i < 1000; i++){
++								usleep(10000);
++								ext__system__server__delegate_(1,i);
++							}
++						}
++						if(me == 1){
++							for(int i = 666; i < 1000; i++){
++								usleep(10000);
++								ext__system__server__delegate_(2,i);
++							}
++						}
++						
++					}else{
++					
+             unsigned loc__0;
+     loc__0 = (unsigned)___ivy_choose(0,"loc:0",485);
+             {
+@@ -1331,7 +1517,9 @@
+                         ext__trans__send_delegate(dst, k, system__server__hash[k]);
+                     }
+                 }
++
+             }
++					}
+         }
+     }
+ }
+@@ -1519,6 +1707,7 @@
+                 loc__m.num = trans__send_seq[dst];
+                 trans__send_seq[dst] = ext__seqnum__next(trans__send_seq[dst]);
+                 ext__trans__mq__enqueue(dst, loc__m);
++								std::cout << "sending to  " << dst << " loc = " << loc__m << "\n";
+                 ext__net__send(dst, loc__m);
+             }
+         }
+@@ -1553,10 +1742,30 @@
+ }
+ void sht_system::ext__trans__handle_delegate(unsigned k, unsigned v){
+     {
++			std::cout << "delegated , " << k << " :: " << v << "\n";
+         ext__system__server__dm__set(k, me);
+         system__server__hash[k] = v;
+     }
+ }
++
++
++void sht_system::ext__trans__handle_serverRequest(const req& rq){
++    {
++        if((rq.rtype == write)){
++            {
++                ext__system__server__set(rq.rkey, rq.rdata);
++            }
++        }
++        else {
++            {
++                ext__system__server__get(rq.rkey);
++            }
++        }
++    }
++}
++
++
++
+ void sht_system::ext__trans__mq__imap__erase(unsigned prm__D, const seqnum__iter__t& lo, const seqnum__iter__t& hi){
+     {
+ 
+@@ -1762,6 +1971,8 @@
+         ext__trans__mq__imap__set(prm__D, m.num, m);
+     }
+ }
++
++
+ sht_system::msg sht_system::ext__trans__mq__imap__get(unsigned prm__D, unsigned k, const msg& def){
+     sht_system::msg v;
+     v.m_kind = (msg_kind)___ivy_choose(0,"fml:v",0);
+@@ -1809,6 +2020,17 @@
+ }
+ void sht_system::ext__system__server__answer(unsigned k, unsigned v, unsigned long long id){
+     imp__system__server__answer(k, v, id);
++    sht_system::msg pkt;
++        // msg loc__m;
++	pkt.m_kind = (msg_kind)___ivy_choose(0,"loc:m",498);
++	pkt.src = (unsigned)___ivy_choose(0,"loc:m",498);
++	pkt.rq.src = (unsigned)___ivy_choose(0,"loc:m",498);
++	pkt.rq.rid = (unsigned long long)___ivy_choose(0,"loc:m",498);
++	pkt.rq.rkey = (unsigned)___ivy_choose(0,"loc:m",498);
++	pkt.rq.rtype = (otype)___ivy_choose(0,"loc:m",498);
++	pkt.rq.rdata = (unsigned)___ivy_choose(0,"loc:m",498);
++	pkt.num = (unsigned)___ivy_choose(0,"loc:m",498);
++    net__impl__rdr->writeToFRONTEND(-1,pkt);
+ }
+ void sht_system::ext__trans__send_reply(unsigned dst, const req& rq){
+     {
+@@ -1882,11 +2104,12 @@
+     // that captures the instance environment, in this case including
+     // the instance's endpoint id "me".
+ 
+-    net__tcp__impl__cb = new tcp_callbacks(thunk__net__tcp__impl__handle_accept(this),thunk__net__tcp__impl__handle_recv(this),thunk__net__tcp__impl__handle_fail(this),thunk__net__tcp__impl__handle_connected(this));
++    net__tcp__impl__cb = new tcp_callbacks(thunk__net__tcp__impl__handle_accept(this),thunk__net__tcp__impl__handle_recv(this),thunk__net__tcp__impl__handle_fail(this),thunk__net__tcp__impl__handle_connected(this),thunk__net__impl__handle_recv(this));
+ 
+     // Install a listener task for this endpoint. If parameterized, this creates
+     // one for each endpoint.
+-
++    install_reader(net__impl__rdr = new udp_reader(me,thunk__net__impl__handle_recv(this), this));
++		
+     install_reader(net__tcp__impl__rdr = new tcp_listener(me,*net__tcp__impl__cb,this));
+     for (unsigned D = 0; D < 1024; D++) {
+         
+@@ -2031,6 +2254,8 @@
+     if (t == sht_system::msg_kind__reply_t) s<<"reply_t";
+     if (t == sht_system::msg_kind__delegate_t) s<<"delegate_t";
+     if (t == sht_system::msg_kind__ack_t) s<<"ack_t";
++    if (t == sht_system::msg_kind__server_req_t) s<<"server_req_t";
++		
+     return s;
+ }
+ template <>
+@@ -2457,6 +2682,7 @@
+     if(arg.atom == "reply_t") return sht_system::msg_kind__reply_t;
+     if(arg.atom == "delegate_t") return sht_system::msg_kind__delegate_t;
+     if(arg.atom == "ack_t") return sht_system::msg_kind__ack_t;
++    if(arg.atom == "server_req_t") return sht_system::msg_kind__server_req_t;
+     throw out_of_bounds("bad value: " + arg.atom,arg.pos);
+ }
+ template <>
+@@ -2534,6 +2760,7 @@
+ 
+                 if (action == "system.server.delegate_") {
+                     check_arity(args,2,action);
++										std::cout<<"delegate " << _arg<unsigned>(args,0,1024) << " , " << _arg<unsigned>(args,1,1024) << "\n";
+                     ivy.ext__system__server__delegate_(_arg<unsigned>(args,0,1024),_arg<unsigned>(args,1,1024));
+                 }
+                 else
+@@ -2731,6 +2958,23 @@
+     ivy.__unlock();
+ 
+     cmd_reader *cr = new cmd_reader(ivy);
++		
++	    // Auto Delegate (1000 keys 3 nodes example)
++    // if(p__me == 0 ||p__me == 2 ){ // Delegate 333 -> 999 to Node 1
++    //   for(int i = 333; i < 666; i++){
++    //     std::string delegateCommand;
++    //     delegateCommand = "system.server.delegate_(" + std::to_string(1) + ","  +  std::to_string(i) +")";
++    //     cr->process(delegateCommand);
++    //   }
++    // }
++    // if(p__me == 1 || p__me == 0){ // Delegate 666 -> 999 to Node 2
++    //   for(int i = 666; i < 1000; i++){
++    //     std::string delegateCommand;
++    //     delegateCommand = "system.server.delegate_(" + std::to_string(2) + ","  +  std::to_string(i) +")";
++    //     cr->process(delegateCommand);
++    //   }
++    // }
++    //
+ 
+     // The main thread runs the console reader
+ 

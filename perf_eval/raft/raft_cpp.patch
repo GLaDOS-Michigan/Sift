@@ -1,0 +1,540 @@
+--- ../../raft/raft_system.cpp	2022-05-07 18:32:35.687363489 -0400
++++ raft_system_tcp.cpp	2022-05-07 17:48:28.683305201 -0400
+@@ -29,11 +29,22 @@
+ #else
+ #include <cstdint>
+ #endif
++
++#include <arpa/inet.h>
++#include "config.h"
++#include <map>
++#include <iterator>
++#include <string>
++
++
++
+ typedef raft_system ivy_class;
+ std::ofstream __ivy_out;
+ std::ofstream __ivy_modelfile;
+ void __ivy_exit(int code){exit(code);}
+ 
++bool DEBUG = false; // Change to true to see server side output
++
+ class reader {
+ public:
+     virtual int fdes() = 0;
+@@ -198,6 +209,17 @@
+     }
+ };
+ 
++struct thunk__net__impl__handle_recv{
++    raft_system *__ivy;
++    thunk__net__impl__handle_recv(raft_system *__ivy): __ivy(__ivy){}
++    void operator()(raft_system::msg x) const {
++      // std::cout<< "WORKED???\n";
++        __ivy->net__tcp__impl__handle_recv(-1,x);
++    }
++};
++
++
++
+ /*++
+ Copyright (c) Microsoft Corporation
+ 
+@@ -1014,7 +1036,7 @@
+ #else
+             inetaddr = INADDR_ANY;
+ #endif
+-            inetport = 5990+ id;
++            inetport = 4990+ id;
+     }
+ 
+     // This reverses the default configuration's map. Note, this is a little dangerous
+@@ -1022,7 +1044,7 @@
+     // no way to know the correct range of endpoint ids.
+ 
+     int tcp_config::rev(unsigned long inetaddr, unsigned long inetport) {
+-        return inetport - 5990; // don't use this for real, it's vulnerable
++        return inetport - 4990; // don't use this for real, it's vulnerable
+     }
+ 
+     // construct a sockaddr_in for a specified process id using the configuration
+@@ -1033,7 +1055,9 @@
+         unsigned long inetport;
+         ivy->get_tcp_config() -> get(my_id,inetaddr,inetport);
+         myaddr.sin_family = AF_INET;
+-        myaddr.sin_addr.s_addr = htonl(inetaddr);
++        // myaddr.sin_addr.s_addr = htonl(inetaddr);
++        myaddr.sin_addr.s_addr = inet_addr(server_map.at(my_id)); // added to read from config.h
++				
+         myaddr.sin_port = htons(inetport);
+     }
+ 
+@@ -1064,12 +1088,164 @@
+         thunk__net__tcp__impl__handle_recv rcb;
+         thunk__net__tcp__impl__handle_fail fcb;
+         thunk__net__tcp__impl__handle_connected ccb;
++        thunk__net__impl__handle_recv rccb;
+         tcp_callbacks(const thunk__net__tcp__impl__handle_accept &acb,
+                       const thunk__net__tcp__impl__handle_recv &rcb,
+                       const thunk__net__tcp__impl__handle_fail &fcb,
+-                      const thunk__net__tcp__impl__handle_connected ccb)
+-            : acb(acb), rcb(rcb), fcb(fcb), ccb(ccb) {}
++                      const thunk__net__tcp__impl__handle_connected ccb,
++											const thunk__net__impl__handle_recv rccb)
++            : acb(acb), rcb(rcb), fcb(fcb), ccb(ccb), rccb(rccb) {}
+     };
++		
++  	class udp_reader : public reader {
++  	    int sock;
++  	    int my_id;
++  	    thunk__net__impl__handle_recv rcb;
++  	    ivy_class *ivy;
++        // udp_config *conf;
++  	    bool bound;
++  	  public:
++  	    udp_reader(int _my_id, thunk__net__impl__handle_recv rcb, ivy_class *ivy)
++  	        : my_id(_my_id), rcb(rcb), ivy(ivy), bound(false) {
++  		sock = socket(AF_INET, SOCK_DGRAM, 0);
++  		if (sock < 0)
++  		    { std::cerr << "cannot create socket\n"; exit(1); }
++
++              }
++              void bind_int() {
++                  if (!bound) {
++                      struct sockaddr_in myaddr;
++                      get_addr_dyno(my_id,myaddr,-1);
++                     std::cout << "*binding id: " << my_id << " port: " << ntohs(myaddr.sin_port) << std::endl;
++                      if (::bind(sock, (struct sockaddr *)&myaddr, sizeof(myaddr)) < 0)
++                          { std::cerr << "bind failed\n"; exit(1); }
++                  }
++                  bound = true;
++              }
++                    
++  	    virtual void bind() {
++  	        ivy -> __lock();  // can be asynchronous, so must lock ivy!
++                  bind_int();
++  	        ivy -> __unlock();
++  	    }
++  	    virtual ~udp_reader() {
++  #ifdef _WIN32
++                  closesocket(sock);
++  #else
++  	        close(sock);
++  #endif
++  	    }
++  	    virtual void get_addr(int my_id, sockaddr_in &myaddr) {
++  		memset((char *)&myaddr, 0, sizeof(myaddr));
++  		unsigned long inetaddr;
++  		unsigned long inetport;
++  	        // if (!conf) {
++//                 conf = ivy -> get_udp_config();
++//                   }
++      // conf -> get(my_id,inetaddr,inetport);
++  		myaddr.sin_family = AF_INET;
++  		myaddr.sin_addr.s_addr = htonl(inetaddr);
++  		myaddr.sin_port = htons(5990+42);
++  	    }
++
++  	    virtual int fdes() {
++  		return sock;
++  	    }
++      
++      
++  	    virtual void get_addr_dyno(int my_id, sockaddr_in &myaddr, int val) {
++  		memset((char *)&myaddr, 0, sizeof(myaddr));
++  		unsigned long inetaddr;
++  		unsigned long inetport;
++  		myaddr.sin_family = AF_INET;
++  		myaddr.sin_addr.s_addr = htonl(inetaddr);
++      if(my_id == -1){
++        myaddr.sin_port = htons(4942 + val); // random port for server frontend (could be anything)
++      }else{
++        myaddr.sin_port = htons(4990+ my_id);
++      }
++    
++      char *addr = server_map.at(my_id);
++      if (inet_aton(addr, &myaddr.sin_addr)==0) {
++              fprintf(stderr, "inet_aton() failed\n");
++              exit(1);
++            }
++
++  	    }
++      
++      
++  	    virtual void read() {
++      // std::cout << "RECEIVING READ \n";
++  	        int len=0;
++                  socklen_t lenlen=4;
++  #ifdef _WIN32
++  	        if (getsockopt(sock,SOL_SOCKET,SO_RCVBUF,(char *)&len,&lenlen))
++  #else
++  	        if (getsockopt(sock,SOL_SOCKET,SO_RCVBUF,&len,&lenlen))
++  #endif
++  	            { perror("getsockopt failed"); exit(1); }
++  	        std::vector<char> buf(len);
++  	        int bytes;
++  		if ((bytes = recvfrom(sock,&buf[0],len,0,0,0)) < 0)
++  		    { std::cerr << "recvfrom failed\n"; exit(1); }
++  	        buf.resize(bytes);
++  	        raft_system::msg pkt;
++  	        try {
++  		    ivy_binary_deser ds(buf);
++          // std::cout << "Bbuff =  " << buf.size() << "\n";
++  		    __deser(ds,pkt);
++          buf.clear(); 
++  	            if (ds.pos < buf.size())
++  	                throw deser_err();
++                  } catch (deser_err &){
++  		    std::cout << "BAD PACKET RECEIVED (incorrect formatting)" << sock << "\n";
++  		    return;
++  		}
++  		ivy->__lock();
++  		rcb(pkt);
++  		ivy->__unlock();
++  	    }
++  	    virtual void write(int dst, raft_system::msg pkt) {
++  	        bind_int();
++  		struct sockaddr_in dstaddr;
++  		get_addr_dyno(dst,dstaddr,-1);
++  		ivy_binary_ser sr;
++  	        __ser(sr,pkt);
++  		//std::cout << "SENDING\n";
++  		if (sendto(sock,&sr.res[0],sr.res.size(),0,(sockaddr *)&dstaddr,sizeof(sockaddr_in)) < 0) 
++  #ifdef _WIN32
++  		     { std::cerr << "sendto failed " << WSAGetLastError() << "\n"; exit(1); }
++  #else
++  		     { std::cerr << "sendto failed\n"; exit(1); }
++  #endif
++      
++  	    }
++      
++      
++      
++  	    virtual void writeToFRONTEND(int dst, raft_system::msg pkt) {
++  	        bind_int();          
++  		struct sockaddr_in dstaddr;
++  		ivy_binary_ser sr;
++  	        __ser(sr,pkt);
++
++                      struct sockaddr_in serveraddr;
++											// std::cout << "SENDING TO CLIENT" << pkt.m_value << "\n";
++											
++                      get_addr_dyno(-1,serveraddr,std::stoi(pkt.m_val)/100);
++                         if (sendto(sock,&sr.res[0],sr.res.size(),0,(sockaddr *)&serveraddr,sizeof(sockaddr_in)) < 0)
++                     #ifdef _WIN32
++                              { std::cerr << "sendto failed " << WSAGetLastError() << "\n"; exit(1); }
++                     #else
++                              { std::cerr << "sendto failed\n"; exit(1); }
++                     #endif
++                  
++           }
++      
++        // }
++      
++      
++  	};
+ 
+     // This is a general class for an asynchronous task. These objects are called in a loop
+     // by a thread allocated by the runtime. The fdes method returns a file descriptor
+@@ -1145,6 +1321,47 @@
+         }
+     };
+ 
++		
++    // virtual void get_addr_dyno(int my_id, sockaddr_in &myaddr, int val) {
++// 	memset((char *)&myaddr, 0, sizeof(myaddr));
++// 	unsigned long inetaddr;
++// 	unsigned long inetport;
++// 	myaddr.sin_family = AF_INET;
++// 	myaddr.sin_addr.s_addr = htonl(inetaddr);
++//   if(my_id == -1){
++//     myaddr.sin_port = htons(4942 + val); // random port for server frontend (could be anything)
++//   }else{
++//     myaddr.sin_port = htons(4990+ my_id);
++//   }
++//
++//   char *addr = server_map.at(my_id);
++//   if (inet_aton(addr, &myaddr.sin_addr)==0) {
++//           fprintf(stderr, "inet_aton() failed\n");
++//           exit(1);
++//         }
++//
++//     }
++		
++		
++    // virtual void writeToFRONTEND(int dst, raft_system::msg pkt) {
++    //     bind_int();
++    // 				struct sockaddr_in dstaddr;
++    //
++    // 				ivy_binary_ser sr;
++    //     __ser(sr,pkt);
++    // 				if(DEBUG){std::cout << "SENDING TO CLIENT" << pkt.m_val << "\n";}
++    // 				if(DEBUG){std::cout << "ID = " << std::stoi(pkt.m_val)/100 << "\n";}
++    //     struct sockaddr_in serveraddr;
++    //     get_addr_dyno(-1,serveraddr,std::stoi(pkt.m_val)/100);
++    //        if (sendto(sock,&sr.res[0],sr.res.size(),0,(sockaddr *)&serveraddr,sizeof(sockaddr_in)) < 0)
++    //    #ifdef _WIN32
++    //             { std::cerr << "sendto failed " << WSAGetLastError() << "\n"; exit(1); }
++    //    #else
++    //             { std::cerr << "sendto failed\n"; exit(1); }
++    //    #endif
++    //
++    //    }
++			 
+ 
+     // This class writes queued packets to a socket. Packets can be added
+     // asynchronously to the tail of the queue. If the socket is closed,
+@@ -1762,21 +1979,25 @@
+     }
+     return y;
+ }
+-void raft_system::ext__trans__handle_nack(const node& n, int t, int ix){
++int raft_system::ext__net__tcp__connect(const node& other){
++    int s;
++    s = (int)___ivy_choose(0,"fml:s",0);
+     {
+-        {
+-            int loc__0;
+-    loc__0 = (int)___ivy_choose(0,"loc:0",781);
+-            {
+-                loc__0 = ext__logs__size(system__server__mylogs);
+-                if(((system__server__current_term == t) && system__server__is_leader && (ix < loc__0))){
+-                    {
+-                        ext__system__server__replicate_entry(ix, true, n);
+-                    }
+-                }
+-            }
+-        }
++        s = make_tcp_socket();
++        // std::cout << "" << s << std::endl;
++
++        // create a send queue for this socket, if needed, along with
++        // its thread. if the queue exists, it must be closed, so
++        // we open it.
++
++        tcp_queue *queue;
++        if (net__tcp__impl__send_queue.find(s) == net__tcp__impl__send_queue.end()) {
++            net__tcp__impl__send_queue[s] = queue = new tcp_queue(other);
++             install_thread(new tcp_writer(self,s,queue,*net__tcp__impl__cb,this));
++        } else
++            net__tcp__impl__send_queue[s] -> set_open(other);
+     }
++    return s;
+ }
+ void raft_system::ext__net__tcp__accept(int s, const node& other){
+     {
+@@ -1821,13 +2042,13 @@
+             {
+                 {
+                     log_entry loc__e;
+-    loc__e.logt = (int)___ivy_choose(0,"loc:e",776);
++    loc__e.logt = (int)___ivy_choose(0,"loc:e",777);
+                     {
+                         loc__e.logt = system__server__current_term;
+                         loc__e.logv = v;
+                         {
+                             int loc__ix;
+-    loc__ix = (int)___ivy_choose(0,"loc:ix",775);
++    loc__ix = (int)___ivy_choose(0,"loc:ix",776);
+                             {
+                                 loc__ix = logs__end(system__server__mylogs);
+                                 ext__logs__append(system__server__mylogs, loc__e);
+@@ -1858,6 +2079,7 @@
+         if(!net__proc__isup[dst]){
+             if(!net__proc__pend[dst]){
+                 {
++					 // std::cout << "";
+                     net__proc__sock[dst] = ext__net__tcp__connect(dst);
+                     net__proc__pend[dst] = true;
+                 }
+@@ -1866,12 +2088,12 @@
+         else {
+             {
+                 bool loc__0;
+-    loc__0 = (bool)___ivy_choose(0,"loc:0",778);
++    loc__0 = (bool)___ivy_choose(0,"loc:0",779);
+                 {
+                     loc__0 = ext__net__tcp__send(net__proc__sock[dst], v);
+                     {
+                         bool loc__ok;
+-    loc__ok = (bool)___ivy_choose(0,"loc:ok",777);
++    loc__ok = (bool)___ivy_choose(0,"loc:ok",778);
+                         {
+                             loc__ok = loc__0;
+                             if(!loc__ok){
+@@ -1938,12 +2160,12 @@
+     {
+         {
+             msg loc__m;
+-    loc__m.m_kind = (msgkind)___ivy_choose(0,"loc:m",779);
+-    loc__m.m_ix = (int)___ivy_choose(0,"loc:m",779);
+-    loc__m.m_term = (int)___ivy_choose(0,"loc:m",779);
+-    loc__m.m_logt = (int)___ivy_choose(0,"loc:m",779);
+-    loc__m.m_prevlogt = (int)___ivy_choose(0,"loc:m",779);
+-    loc__m.m_isrecover = (bool)___ivy_choose(0,"loc:m",779);
++    loc__m.m_kind = (msgkind)___ivy_choose(0,"loc:m",780);
++    loc__m.m_ix = (int)___ivy_choose(0,"loc:m",780);
++    loc__m.m_term = (int)___ivy_choose(0,"loc:m",780);
++    loc__m.m_logt = (int)___ivy_choose(0,"loc:m",780);
++    loc__m.m_prevlogt = (int)___ivy_choose(0,"loc:m",780);
++    loc__m.m_isrecover = (bool)___ivy_choose(0,"loc:m",780);
+             {
+                 loc__m.m_kind = keepalive;
+                 loc__m.m_term = t;
+@@ -2037,7 +2259,7 @@
+                 system__server__leader_election__my_time = ext__time__next(system__server__leader_election__my_time);
+                 {
+                     bool loc__0;
+-    loc__0 = (bool)___ivy_choose(0,"loc:0",780);
++    loc__0 = (bool)___ivy_choose(0,"loc:0",781);
+                     {
+                         loc__0 = ext__system__server__leader_election__is_leader_too_quiet();
+                         if(loc__0){
+@@ -2135,6 +2357,11 @@
+                                 if((v.m_kind == nack)){
+                                     ext__trans__handle_nack(v.m_node, v.m_term, v.m_ix);
+                                 }
++		                            else {
++		                              if((v.m_kind == msg_kind__client_req)){ // client req handler -- ie. just try and propose val
++																		ext__system__server__propose((v.m_val));
++		                              }
++		                           }
+                             }
+                         }
+                     }
+@@ -2163,25 +2390,21 @@
+     }
+     return t;
+ }
+-int raft_system::ext__net__tcp__connect(const node& other){
+-    int s;
+-    s = (int)___ivy_choose(0,"fml:s",0);
++void raft_system::ext__trans__handle_nack(const node& n, int t, int ix){
+     {
+-        s = make_tcp_socket();
+-        // std::cout << "SOCKET " << s << std::endl;
+-
+-        // create a send queue for this socket, if needed, along with
+-        // its thread. if the queue exists, it must be closed, so
+-        // we open it.
+-
+-        tcp_queue *queue;
+-        if (net__tcp__impl__send_queue.find(s) == net__tcp__impl__send_queue.end()) {
+-            net__tcp__impl__send_queue[s] = queue = new tcp_queue(other);
+-             install_thread(new tcp_writer(self,s,queue,*net__tcp__impl__cb,this));
+-        } else
+-            net__tcp__impl__send_queue[s] -> set_open(other);
++        {
++            int loc__0;
++    loc__0 = (int)___ivy_choose(0,"loc:0",774);
++            {
++                loc__0 = ext__logs__size(system__server__mylogs);
++                if(((system__server__current_term == t) && system__server__is_leader && (ix < loc__0))){
++                    {
++                        ext__system__server__replicate_entry(ix, true, n);
++                    }
++                }
++            }
++        }
+     }
+-    return s;
+ }
+ void raft_system::ext__replierslog__resize(replierslog& a, int s, const nset& v){
+     {
+@@ -2256,8 +2479,8 @@
+ }
+ void raft_system::ext__system__server__replicate_entry(int ix, bool isrecover, const node& recovernode){
+     {
+-        ivy_assume(system__server__is_leader, "raft_system.ivy: line 184");
+-        ivy_assume((ix < logs__end(system__server__mylogs)), "raft_system.ivy: line 185");
++        ivy_assume(system__server__is_leader, "raft_system.ivy: line 187");
++        ivy_assume((ix < logs__end(system__server__mylogs)), "raft_system.ivy: line 188");
+         {
+             int loc__previx;
+     loc__previx = (int)___ivy_choose(0,"loc:previx",791);
+@@ -2411,7 +2634,7 @@
+         {
+             system__server__leader_election__my_time = 0;
+             system__server__leader_election__last_heard_from_leader = system__server__leader_election__my_time;
+-            system__server__leader_election__timeout = 5;
++            system__server__leader_election__timeout = 5; //5
+         }
+     }
+ }
+@@ -2538,6 +2761,31 @@
+                                                 system__server__commit_ix = ext__index__next(ix);
+                                                 ext__system__commit(self, ix);
+                                                 ext__protocol1__recv_append_reply(self, t, ix, loc__rep);
++																                if(self == 1){
++															                    log_entry loc__c;
++																									__strlit v;
++															    								loc__c.logt = (int)___ivy_choose(0,"loc:0",727);
++															                    {
++															                        loc__c = ext__logs__get(system__server__mylogs, ix);
++															                        v = loc__c.logv;
++															                    }
++																			            msg loc__m;
++																			    loc__m.m_kind = (msgkind)___ivy_choose(0,"loc:m",753);
++																			    loc__m.m_ix = (int)___ivy_choose(0,"loc:m",753);
++																			    loc__m.m_term = (int)___ivy_choose(0,"loc:m",753);
++																			    loc__m.m_logt = (int)___ivy_choose(0,"loc:m",753);
++																			    loc__m.m_prevlogt = (int)___ivy_choose(0,"loc:m",753);
++																			    loc__m.m_isrecover = (bool)___ivy_choose(0,"loc:m",753);
++													                loc__m.m_kind = appendmsg;
++													                loc__m.m_term = t;
++													                loc__m.m_val = v;
++													                loc__m.m_logt = 0;
++													                loc__m.m_node = self;
++													                loc__m.m_ix = ix;
++													                loc__m.m_prevlogt = 0;
++													                loc__m.m_isrecover = isrecover;
++																                   net__impl__rdr->writeToFRONTEND(-1,loc__m);
++																                }
+                                             }
+                                         }
+                                     }
+@@ -2683,11 +2931,12 @@
+     // that captures the instance environment, in this case including
+     // the instance's endpoint id "me".
+ 
+-    net__tcp__impl__cb = new tcp_callbacks(thunk__net__tcp__impl__handle_accept(this),thunk__net__tcp__impl__handle_recv(this),thunk__net__tcp__impl__handle_fail(this),thunk__net__tcp__impl__handle_connected(this));
++    net__tcp__impl__cb = new tcp_callbacks(thunk__net__tcp__impl__handle_accept(this),thunk__net__tcp__impl__handle_recv(this),thunk__net__tcp__impl__handle_fail(this),thunk__net__tcp__impl__handle_connected(this),thunk__net__impl__handle_recv(this));
+ 
+     // Install a listener task for this endpoint. If parameterized, this creates
+     // one for each endpoint.
+-
++    install_reader(net__impl__rdr = new udp_reader(self,thunk__net__impl__handle_recv(this), this));
++		
+     install_reader(net__tcp__impl__rdr = new tcp_listener(self,*net__tcp__impl__cb,this));
+     install_timer(system__server__leader_election__sec__impl__tmr = new sec_timer(thunk__system__server__leader_election__sec__impl__handle_timeout(this),this));
+     this->node__size = node__size;
+@@ -2876,6 +3125,7 @@
+     if (t == raft_system::appendrep) s<<"appendrep";
+     if (t == raft_system::keepalive) s<<"keepalive";
+     if (t == raft_system::nack) s<<"nack";
++    if (t == raft_system::msg_kind__client_req) s<<"client_req";
+     return s;
+ }
+ template <>
+@@ -2919,10 +3169,10 @@
+     }
+     raft_system_repl(node node__size, node self) : raft_system(node__size,self){}
+     virtual void imp__trans__send_debug(const msg& m){
+-    __ivy_out  << "< trans.send_debug" << "(" << m << ")" << std::endl;
++    // __ivy_out  << "< trans.send_debug" << "(" << m << ")" << std::endl;
+ }
+     virtual void imp__trans__recv_debug(const msg& m){
+-    __ivy_out  << "< trans.recv_debug" << "(" << m << ")" << std::endl;
++    // __ivy_out  << "< trans.recv_debug" << "(" << m << ")" << std::endl;
+ }
+ 
+     };
+@@ -3346,6 +3596,7 @@
+     if(arg.atom == "appendrep") return raft_system::appendrep;
+     if(arg.atom == "keepalive") return raft_system::keepalive;
+     if(arg.atom == "nack") return raft_system::nack;
++    if(arg.atom == "client_req") return raft_system::msg_kind__client_req;
+     throw out_of_bounds("bad value: " + arg.atom,arg.pos);
+ }
+ template <>

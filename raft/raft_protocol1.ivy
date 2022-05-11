@@ -185,5 +185,12 @@ isolate protocol1 = {
         invariant log_term(N, IX1, T1) & log_term(N, IX2, T2) & IX1 < IX2 -> T1 <= T2
         invariant log_term(N, IX, T1) & log_term(N, IX, T2) -> T1 = T2
 
+# invariant [ic3po_other13]       (forall T1, T2, N1, I1 . ((protocol1.log_term(N1, I1, T2) & (T1 < T2)) -> protocol1.left_term(N1, T1)))
+# invariant [ic3po_other12]       (forall I1, T2, N1, T1 . ((T2 < T1) -> (protocol0.log_term(N1, I1, T1) -> ~protocol1.current_term(N1, T2))))
+# invariant [ic3po_global2_5]     (forall I1, T1, T2, V1, T3 . ((T3 < T1) -> ~protocol1.append(T2, I1, V1, T3, T1)))
+# invariant [ic3po_global1_6]     (forall T1, T2, N1 . ((protocol1.current_term(N1, T2) & protocol1.current_term(N1, T1)) -> (T1 = T2)))
+# invariant [ic3po_other6]        (forall I1, T1, T2, V1, T3 . ((T2 < T3) -> ~protocol0.append(T2, I1, V1, T3, T1)))
+# invariant [ic3po_global1_10_1]  (forall T1, T2, N1 . (((T2 < T1) & protocol1.current_term(N1, T1)) -> protocol0.left_term(N1, T2)))
+
     }
 } with protocol0, nset, index, term

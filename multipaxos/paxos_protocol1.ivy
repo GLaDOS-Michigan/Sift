@@ -116,6 +116,10 @@ isolate protocol1 = {
             invariant available(R, I) <-> protocol0.available(R, I)
             invariant ~active(0)
 
+# invariant [ic3po_other4]        (forall N1, V1, V2, I1, R1 . (((maxr(votemap_seg.value(V2, I1)) = 0) & protocol1.two_b(N1, I1, 0, V1) & protocol1.one_b(N1, R1, V2)) -> ((I1 < votemap_seg.first(V2)) | (R1 = 0))))
+# invariant [ic3po_other6]        (forall R1, R2, N1, V1, V2, I1 . (((maxr(votemap_seg.value(V2, I1)) < R2) & (R2 < R1) & protocol1.two_b(N1, I1, R2, V1) & protocol1.one_b(N1, R1, V2)) -> (I1 < votemap_seg.first(V2))))
+# invariant [ic3po_global1_5]     (forall R2, N1, R1 . ((protocol0.joined_round(N1, R1) & (R2 < R1)) -> protocol0.left_round(N1, R2)))
+# invariant [ic3po_other3]        (forall I1, R1, R2, N1, V1, V2 . ((protocol1.two_b(N1, I1, R1, V1) & protocol1.one_b(N1, R2, V2) & (R1 < R2)) -> ((I1 < votemap_seg.upper(V2)) | (I1 < votemap_seg.first(V2)))))
         }
     }
 } with round, inst, not_a_vote_def, protocol0

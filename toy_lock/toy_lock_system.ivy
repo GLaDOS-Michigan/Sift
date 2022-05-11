@@ -36,6 +36,13 @@ isolate system = {
 
     invariant [safety] trans.locked(E, N) -> spec.lock_history(E, N)
 
+# invariant [ic3po_other6]        (forall N1, E1, N2 . ((trans.transfer(E1, N1) & trans.transfer(E1, N2)) -> (N2 = N1)))
+# invariant [ic3po_other1]        (forall N2, E1, N1 . ((system.server.held(N2) & trans.transfer(E1, N1)) -> trans.transfer(system.server.ep(N2), N2)))
+# invariant [ic3po_other5]        (forall E1, N2, N1 . ((system.server.held(N1) & trans.transfer(E1, N2)) -> ((E1 < system.server.ep(N1)) | (E1 = system.server.ep(N1)))))
+# invariant [ic3po_global1_5]     (forall N1, E1 . (trans.locked(E1, N1) -> (trans.transfer(E1, N1) | (0 = E1))))
+# invariant [ic3po_global1_3]     (forall N1, E1 . (spec.lock_history(E1, N1) -> ((0 = E1) | trans.locked(E1, N1))))
+# invariant [ic3po_other2]        (forall E2, N2, E1, N1 . ((trans.transfer(E1, N1) & trans.transfer(E2, N2) & (system.server.ep(N1) < E1)) -> ((E2 = E1) | (E2 < E1))))
+# invariant [ic3po_other3]        (forall N1, N2 . ((system.server.held(N1) & system.server.held(N2)) -> (N2 = N1)))
 } with spec, epoch, trans
 
 import trans.handle_locked

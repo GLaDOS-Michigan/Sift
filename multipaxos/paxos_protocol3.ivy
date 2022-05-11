@@ -199,6 +199,14 @@ isolate protocol3 = {
             invariant inst_status(N).end = protocol2.inst_status(N).end
             invariant inst_status(N).end ~= 0 -> inst_status(N) = protocol2.inst_status(N)
 
+# invariant [ic3po_global3_13]    (forall N1, V1, R1, N2 . (protocol2.one_b(N1, N2, R1, V1) -> ((protocol3.current_round(N1) = R1) | (R1 < protocol3.current_round(N1)))))
+# invariant [ic3po_global3_10]    (forall N1, R1, V1, N2 . (protocol2.one_b(N2, N1, R1, V1) -> (protocol3.one_a(N1, R1, votemap_seg.first(V1)) | (N1 = N2))))
+# invariant [ic3po_other1]        (forall V1, I1, N1 . ((protocol3.two_a(I1, protocol3.current_round(N1), V1) & leader_of(N1, protocol3.current_round(N1))) -> protocol3.round_active(N1)))
+# invariant [ic3po_global7_7]     (forall N1, I1, R1, V1 . ((protocol3.current_round(N1) < R1) -> ~protocol3.two_b(N1, I1, R1, V1)))
+# invariant [ic3po_global3_11]    (forall N1, R1, I1 . (protocol3.one_a(N1, R1, I1) -> ((R1 < protocol3.current_round(N1)) | (R1 = protocol3.current_round(N1)))))
+# invariant [ic3po_global2_3]     (forall R1, I1, N1 . (protocol2.one_a(N1, R1, I1) -> leader_of(N1, R1)))
+# invariant [ic3po_other2]        (forall I1, N1 . (protocol3.one_a(N1, protocol3.current_round(N1), I1) -> (votemap_seg.first(protocol3.joined_votes(N1)) = I1)))
+# invariant [ic3po_global6_10]    (forall N1, I1, V1, R1 . (leader_of(N1, R1) -> ((protocol3.current_round(N1) < R1) -> ~protocol2.two_a(I1, R1, V1))))
         }
     }
 } with round, inst, not_a_vote_def, init_status_def, ballot_status_array, protocol2, round_leader, votemap_seg, votemap, empty_nset_def

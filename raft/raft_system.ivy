@@ -292,6 +292,8 @@ isolate system = {
 
     invariant server(N).commit_ix <= server(N).mylogs.end
     invariant IX < server(N).commit_ix -> committed(IX, server(N).mylogs.value(IX).logv)
+
+# invariant [ic3po_global5_9_1]   (forall I1, N1, T1 . (protocol1.log_term(N1, I1, T1) -> protocol1.log_filled(N1, I1)))
 } with nset, trans, logs, replierslog, index, term, nset, protocol1, time
 
 extract iso_impl(self: node) = system, system.server(self), index, term, nset, trans(self), net(self), node, replierslog, typeconvert, logs, time

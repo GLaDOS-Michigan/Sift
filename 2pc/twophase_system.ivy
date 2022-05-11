@@ -103,6 +103,16 @@ isolate system = {
     invariant [refinement1] N ~= 0 & trans.committed(N) -> spec.committed(N)
     invariant [refinement3] N ~= 0 & trans.aborted(N) -> spec.aborted(N)
 
+# invariant [ic3po_global1_2]     system.server.is_tm(0)
+# invariant [ic3po_other3]        (forall N2, N1 . (nset.member(N2, system.server.tm_allset(N1)) -> trans.working(N2)))
+# invariant [ic3po_other9]        (forall N2, N1 . (trans.committed(N2) -> (nset.member(N1, system.server.tm_allset(N2)) | (N2 = N1))))
+# invariant [ic3po_global5_12_1]  (forall N1 . (trans.prepared(N1) -> trans.working(N1)))
+# invariant [ic3po_global6_13]    (forall N1, N2 . (nset.member(N1, system.server.tm_prepset(N2)) -> nset.member(N1, system.server.tm_allset(N2))))
+# invariant [ic3po_global1_5]     (forall N1 . ((system.server.state(N1) = system.rm_state.working) -> ~trans.aborted(N1)))
+# invariant [ic3po_global1_1]     (forall N1 . (system.server.is_tm(N1) -> (0 = N1)))
+# invariant [ic3po_global5_7]     (forall N1 . (spec.committed(N1) -> trans.committed(0)))
+# invariant [ic3po_global5_15]    (forall N1 . ((system.server.state(N1) = system.rm_state.working) -> ~trans.working(N1)))
+# invariant [ic3po_global1_9]     (forall N2, N1 . (system.server.is_tm(N2) -> (spec.committed(N1) | spec.prepared(N1) | spec.aborted(N1) | spec.working(N1) | (N2 = N1))))
 } with spec, nset, trans
 
 export system.server.prepare

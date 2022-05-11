@@ -1,4 +1,6 @@
-*/ivy.smt2
-*/*.vmt
-*/*.inv
+ivy.smt2
+*.vmt
+*.inv
 */output
+*.cpp
+*.h

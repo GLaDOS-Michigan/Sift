@@ -42,4 +42,4 @@ After installing IC3PO, add `$(ic3po_path)/pysmt` to `PYTHONPATH` so that ic3po 
 2. To run the system, use `./leader_system $(num_of_nodes) $(my_idn) $(my_index)`. For example, we can run a system with 2 nodes by `./leader_system 2 5 0`; `./leader_system 2 8 1`. You should be able to see the debug log of all sending and receiving messages, and `node1` is elected.
 
 ## Performance evaluation
-See [TODO] for more details about building/running the systems.
+See [perf_eval](https://github.com/GLaDOS-Michigan/Sift/tree/master/perf_eval) for more details about building/running the systems.

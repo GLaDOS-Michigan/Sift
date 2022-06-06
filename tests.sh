@@ -31,7 +31,7 @@ echo -e 'sharded hash table done!\n'
 
 echo 'raft'
 pushd .
-cd ruft
+cd raft
 bash run.sh
 popd
 echo -e 'raft done!\n'
